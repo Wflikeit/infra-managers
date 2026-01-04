@@ -4,12 +4,12 @@
 
 syntax = "proto3";
 
-package remaccessmgr.v1;
+package rmtaccessmgr.v1;
 
 import "validate/validate.proto";
 import "google/protobuf/timestamp.proto";
 
-option go_package = "github.com/open-edge-platform/infra-managers/remote-access/pkg/api/remaccessmgr/v1;remaccessmgrv1";
+option go_package = "github.com/open-edge-platform/infra-managers/remote-access/pkg/api/rmtaccessmgr/v1;remaccessmgrv1";
 
 message GetRemoteAccessConfigByGuidRequest {
   string uuid = 1 [(validate.rules).string = {uuid: true max_bytes: 36}];

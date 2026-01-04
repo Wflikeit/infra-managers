@@ -32,5 +32,5 @@ plugins:
   # docs - https://github.com/pseudomuto/protoc-gen-doc
   - plugin: doc
     out: docs/api
-    opt: markdown,remaccessmgr.md
+    opt: markdown,rmtaccessmgr.md
     strategy: all

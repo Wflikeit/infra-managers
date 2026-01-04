@@ -9,7 +9,7 @@ import (
 	inv_v1 "github.com/open-edge-platform/infra-core/inventory/v2/pkg/api/inventory/v1"
 	"github.com/open-edge-platform/infra-core/inventory/v2/pkg/logging"
 	"github.com/open-edge-platform/infra-core/inventory/v2/pkg/tracing"
-	pb "github.com/open-edge-platform/infra-managers/remote-access/pkg/api/remaccessmgr/v1"
+	pb "github.com/open-edge-platform/infra-managers/remote-access/pkg/api/rmtaccessmgr/v1"
 	"github.com/open-edge-platform/infra-managers/remote-access/pkg/clients"
 	"github.com/open-edge-platform/infra-managers/remote-access/pkg/config"
 	"golang.org/x/net/context"
@@ -143,7 +143,7 @@ func StartInvGrpcCli(
 	events := make(chan *inv_client.WatchEvents, eventsWatcherBufSize)
 
 	cfg := inv_client.InventoryClientConfig{
-		Name:                      "remaccessmgr",
+		Name:                      "rmtaccessmgr",
 		Address:                   conf.InventoryAddr,
 		Events:                    events,
 		EnableRegisterRetry:       false,

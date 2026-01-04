@@ -1,4 +1,4 @@
-# Host Manager Makefile
+# Remote Access Manager Makefile
 
 # SPDX-FileCopyrightText: (C) 2025 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
@@ -27,7 +27,7 @@ GNOSTICGRPC          := true
 PROTOCGENGRPCGATEWAY := true
 
 # Project variables
-PROJECT_NAME         := remaccessmgr
+PROJECT_NAME         := rmtaccessmgr
 PROJECT_NICKNAME     := h
 BINARY_NAME          := $(PROJECT_NAME)
 SUBPROJECT_DIR       := remote-access
@@ -50,7 +50,7 @@ TEST_COVER           := atomic $(shell go list ./... | grep -v "/test" | grep -v
 TEST_USE_DB          := true
 
 # Directory to clean specific to this project
-DIR_TO_CLEAN 		 := $(APIPKG_DIR)/remaccessmgr/proto/*.go
+DIR_TO_CLEAN 		 := $(APIPKG_DIR)/rmtaccessmgr/proto/*.go
 
 # Include shared makefile
 include ../common.mk
@@ -68,7 +68,7 @@ $(OUT_DIR)/$(BINARY_NAME): $(SRC) $(DEPS) ## Build if sources or dependencies ch
 	$(GOCMD) build $(GOEXTRAFLAGS) -o $(OUT_DIR)/$(BINARY_NAME) cmd/$(BINARY_NAME)/main.go
 
 go-run: build ## Run go run
-	$(GOCMD) run $(GOEXTRAFLAGS) cmd/remaccessmgr/main.go
+	$(GOCMD) run $(GOEXTRAFLAGS) cmd/rmtaccessmgr/main.go
 
 buf-update: common-buf-update ## Update buf modules
 

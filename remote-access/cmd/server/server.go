@@ -19,7 +19,7 @@ import (
 	"github.com/open-edge-platform/infra-core/inventory/v2/pkg/policy/rbac"
 	"github.com/open-edge-platform/infra-core/inventory/v2/pkg/tracing"
 	"github.com/open-edge-platform/infra-managers/remote-access/internal/handlers"
-	pb "github.com/open-edge-platform/infra-managers/remote-access/pkg/api/remaccessmgr/v1"
+	pb "github.com/open-edge-platform/infra-managers/remote-access/pkg/api/rmtaccessmgr/v1"
 	"github.com/open-edge-platform/infra-managers/remote-access/pkg/clients"
 	"github.com/open-edge-platform/infra-managers/remote-access/pkg/config"
 	rmtAccessMgr "github.com/open-edge-platform/infra-managers/remote-access/pkg/rmtaccessconfmgr"
@@ -40,7 +40,7 @@ var (
 var (
 	servaddr   = flag.String(flags.ServerAddress, "0.0.0.0:50005", flags.ServerAddressDescription)
 	invsvcaddr = flag.String(client.InventoryAddress, "localhost:50051", client.InventoryAddressDescription)
-	//invsvcaddr           = flag.String(client.InventoryAddress, "remaccessmgr-db:5432", client.InventoryAddressDescription)
+	//invsvcaddr           = flag.String(client.InventoryAddress, "rmtaccessmgr-db:5432", client.InventoryAddressDescription)
 	oamservaddr          = flag.String(oam.OamServerAddress, "", oam.OamServerAddressDescription)
 	insecureGrpc         = flag.Bool(client.InsecureGrpc, true, client.InsecureGrpcDescription)
 	caCertPath           = flag.String(client.CaCertPath, "", client.CaCertPathDescription)

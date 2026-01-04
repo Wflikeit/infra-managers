@@ -9,7 +9,7 @@ import (
 	"time"
 
 	remoteaccessv1 "github.com/open-edge-platform/infra-core/inventory/v2/pkg/api/remoteaccess/v1"
-	pb "github.com/open-edge-platform/infra-managers/remote-access/pkg/api/remaccessmgr/v1"
+	pb "github.com/open-edge-platform/infra-managers/remote-access/pkg/api/rmtaccessmgr/v1"
 	inv_client "github.com/open-edge-platform/infra-managers/remote-access/pkg/clients"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
