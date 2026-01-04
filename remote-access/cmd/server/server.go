@@ -61,7 +61,7 @@ var (
 )
 
 type server struct {
-	pb.UnimplementedRemaccessmgrServiceServer
+	pb.UnimplementedRmtaccessmgrServiceServer
 	mu sync.RWMutex
 	db map[string]*resourcev1.RemoteAccessConfiguration
 }

@@ -18,7 +18,7 @@ import (
 
 type Server struct {
 	inv *inv_client.RmtAccessInventoryClient
-	pb.UnimplementedRemaccessmgrServiceServer
+	pb.UnimplementedRmtaccessmgrServiceServer
 }
 
 func NewServer(inv *inv_client.RmtAccessInventoryClient) *Server {
