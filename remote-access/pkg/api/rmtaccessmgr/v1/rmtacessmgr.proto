@@ -48,7 +48,7 @@ message GetResourceAccessConfigResponse {
   ConfigError error = 5;
 }
 
-service RemaccessmgrService {
+service RmtaccessmgrService {
   rpc GetRemoteAccessConfigByGuid(GetRemoteAccessConfigByGuidRequest)
       returns (GetResourceAccessConfigResponse) {}
 }
