@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: (C) 2025 Intel Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package rmtaccessconfmgr
 
 import (
@@ -95,7 +99,7 @@ func StartGrpcSrv(
 
 	s := grpc.NewServer(grpcOpts...)
 
-	pb.RegisterRemaccessmgrServiceServer(
+	pb.RegisterRmtaccessmgrServiceServer(
 		s,
 		NewServer(invClient),
 	)
