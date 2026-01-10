@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: (C) 2025 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+
 module github.com/open-edge-platform/infra-managers/remote-access
 
 go 1.25.1
