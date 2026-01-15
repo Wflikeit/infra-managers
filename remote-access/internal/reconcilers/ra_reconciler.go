@@ -22,12 +22,13 @@ var (
 )
 
 type RAReconciler struct {
-	netClient      *clients.RmtAccessInventoryClient
-	tracingEnabled bool
+	netClient        *clients.RmtAccessInventoryClient
+	tracingEnabled   bool
+	inventoryTimeout time.Duration
 }
 
-func NewRAReconciler(cl *clients.RmtAccessInventoryClient, tracingEnabled bool) (*RAReconciler, error) {
-	return &RAReconciler{netClient: cl, tracingEnabled: tracingEnabled}, nil
+func NewRAReconciler(cl *clients.RmtAccessInventoryClient, tracingEnabled bool, inventoryTimeout time.Duration) (*RAReconciler, error) {
+	return &RAReconciler{netClient: cl, tracingEnabled: tracingEnabled, inventoryTimeout: inventoryTimeout}, nil
 }
 
 type SpecStatus struct {
@@ -67,7 +68,7 @@ func (rar *RAReconciler) fetchRA(
 	req rec_v2.Request[ReconcilerID],
 ) (*remoteaccessv1.RemoteAccessConfiguration, rec_v2.Directive[ReconcilerID]) {
 
-	ra, err := rar.netClient.GetRemoteAccessConf(ctx, tenantID, resourceID)
+	ra, err := rar.netClient.GetRemoteAccessConf(ctx, tenantID, resourceID, rar.inventoryTimeout)
 	if d := HandleInventoryError(err, req); d != nil {
 		return nil, d
 	}
@@ -133,25 +134,6 @@ func (rar *RAReconciler) reconcileWithSpec(
 		resourceID, ra.GetCurrentState(), ra.GetDesiredState(), spec.Readiness, spec.Reason,
 	)
 
-	//cacheStatus := desiredToCacheStatus(ra, spec.Readiness)
-	//
-	//st := rmtaccessconfmgr.State{
-	//	ObservedAt: now,
-	//	Status:     cacheStatus,
-	//}
-	//
-	//if cacheStatus == pb.ConfigStatus_CONFIG_STATUS_ACTIVE ||
-	//	cacheStatus == pb.ConfigStatus_CONFIG_STATUS_PENDING ||
-	//	cacheStatus == pb.ConfigStatus_CONFIG_STATUS_DISABLED {
-	//	st.Spec = buildAgentSpec(ra)
-	//}
-	//
-	//if cacheStatus == pb.ConfigStatus_CONFIG_STATUS_ERROR {
-	//	st.Error = &pb.ConfigError{
-	//		Code: "SPEC_INVALID",
-	//	}
-	//}
-
 	switch spec.Readiness {
 	case SpecReadinessInvalid:
 		return rar.markError(ctx, req, tenantID, resourceID, spec.Reason, now)
@@ -180,7 +162,7 @@ func (rar *RAReconciler) markError(
 		ConfigurationStatus:          reason,
 		ConfigurationStatusTimestamp: uint64(now.Unix()),
 	}
-	err := rar.netClient.UpdateRemoteAccessConfigState(ctx, tenantID, resourceID, patch)
+	err := rar.netClient.UpdateRemoteAccessConfigState(ctx, tenantID, resourceID, patch, rar.inventoryTimeout)
 	if d := HandleInventoryError(err, req); d != nil {
 		return d
 	}
@@ -209,7 +191,7 @@ func (rar *RAReconciler) convergeState(
 		ConfigurationStatus:          "remote access configuration applied",
 		ConfigurationStatusTimestamp: uint64(now.Unix()),
 	}
-	err := rar.netClient.UpdateRemoteAccessConfigState(ctx, tenantID, resourceID, patch)
+	err := rar.netClient.UpdateRemoteAccessConfigState(ctx, tenantID, resourceID, patch, rar.inventoryTimeout)
 	if d := HandleInventoryError(err, req); d != nil {
 		return d
 	}

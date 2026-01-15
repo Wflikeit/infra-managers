@@ -73,6 +73,7 @@ func StartGrpcSrv(
 	wg *sync.WaitGroup,
 	lis net.Listener,
 	invClient *clients.RmtAccessInventoryClient,
+	inventoryTimeout time.Duration,
 	opts ...Option,
 ) error {
 	options := parseOptions(opts...)
@@ -101,7 +102,7 @@ func StartGrpcSrv(
 
 	pb.RegisterRmtaccessmgrServiceServer(
 		s,
-		NewServer(invClient),
+		NewServer(invClient, inventoryTimeout),
 	)
 	reflection.Register(s)
 

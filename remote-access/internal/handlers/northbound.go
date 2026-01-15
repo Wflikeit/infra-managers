@@ -20,35 +20,34 @@ import (
 
 // Misc variables.
 var (
-	loggerName  = "RAHandler"
-	zlog        = logging.GetLogger(loggerName)
-	parallelism = 1
-
-	// TickerPeriod a default interval for periodic reconciliation.
-	// Periodic reconciliation guarantees events are handled even
-	// if our notification won't deliver an event.
-	// The interval can be tuned, but 1h is a safe default that avoids load even
-	// when the system manages thousands of remote-access resources.
-	TickerPeriod = 1 * time.Hour // TODO move to yaml config file
+	loggerName = "RAHandler"
+	zlog       = logging.GetLogger(loggerName)
 )
 
 // NBHandler supervises a list of controllers.
 type NBHandler struct {
-	Controllers map[inv_v1.ResourceKind]*rec_v2.Controller[reconcilers.ReconcilerID]
-	Filters     map[inv_v1.ResourceKind]Filter
-	netClient   *clients.RmtAccessInventoryClient
-	wg          *sync.WaitGroup
-	sigTerm     chan bool
+	Controllers  map[inv_v1.ResourceKind]*rec_v2.Controller[reconcilers.ReconcilerID]
+	Filters      map[inv_v1.ResourceKind]Filter
+	netClient    *clients.RmtAccessInventoryClient
+	wg           *sync.WaitGroup
+	sigTerm      chan bool
+	tickerPeriod time.Duration
+	// TickerPeriod a default interval for periodic reconciliation.
+	// Periodic reconciliation guarantees events are handled even
+	// if our notification won't deliver an event.
+	// The interval can be tuned, but 1h is a safe default that avoids load even
+	// when the system manages thousands of remote-access resources
+	listAllTimeout time.Duration
 }
 
 // NewNBHandler creates a new NBHandler that supervises the reconciliation
 // of the Northbound (Inventory) resources.
 func NewNBHandler(netCl *clients.RmtAccessInventoryClient,
-	tracingEnabled bool) (*NBHandler, error) {
+	tracingEnabled bool, tickerPeriod time.Duration, parallelism int, inventoryTimeout time.Duration, listAllTimeout time.Duration) (*NBHandler, error) {
 	// Initialize all the reconcilers with their controllers
 	controllers := make(map[inv_v1.ResourceKind]*rec_v2.Controller[reconcilers.ReconcilerID], 1)
 	filters := make(map[inv_v1.ResourceKind]Filter, 1)
-	rmtAccessConfReconciler, err := reconcilers.NewRAReconciler(netCl, tracingEnabled)
+	rmtAccessConfReconciler, err := reconcilers.NewRAReconciler(netCl, tracingEnabled, inventoryTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -58,11 +57,13 @@ func NewNBHandler(netCl *clients.RmtAccessInventoryClient,
 	filters[inv_v1.ResourceKind_RESOURCE_KIND_RMT_ACCESS_CONF] = filterEvents
 	// Note that the resourceID from the events will provide the mapping
 	nbHandler := &NBHandler{
-		Controllers: controllers,
-		Filters:     filters,
-		netClient:   netCl,
-		wg:          &sync.WaitGroup{},
-		sigTerm:     make(chan bool),
+		Controllers:    controllers,
+		Filters:        filters,
+		netClient:      netCl,
+		wg:             &sync.WaitGroup{},
+		sigTerm:        make(chan bool),
+		tickerPeriod:   tickerPeriod,
+		listAllTimeout: listAllTimeout,
 	}
 	return nbHandler, nil
 }
@@ -80,7 +81,7 @@ func (nbh *NBHandler) Start() error {
 	nbh.wg.Add(1)
 	// Full reconciliation is triggered periodically and concur with the events
 	// Note, reconcilers will guarantee the in-order processing (by hashing).
-	go nbh.controlLoop(time.NewTicker(TickerPeriod))
+	go nbh.controlLoop(time.NewTicker(nbh.tickerPeriod))
 	zlog.InfraSec().Info().Msgf("NB handler started")
 	return nil
 }
@@ -136,10 +137,10 @@ func (nbh *NBHandler) controlLoop(ticker *time.Ticker) {
 func (nbh *NBHandler) reconcileAll() error {
 	zlog.Debug().Msgf("Reconciling all RemoteAccessConfigurations")
 
-	ctx, cancel := context.WithTimeout(context.Background(), *clients.ListAllInventoryTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), nbh.listAllTimeout)
 	defer cancel()
 	// Go backward in the hierarchy.
-	rmtAccessConfgs, err := nbh.netClient.FindRemoteAccessConfigs(ctx)
+	rmtAccessConfgs, err := nbh.netClient.FindRemoteAccessConfigs(ctx, nbh.listAllTimeout)
 	if err != nil {
 		return err
 	}

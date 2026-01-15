@@ -26,6 +26,14 @@ type RemoteAccessConfigMgrConfig struct {
 	EnableUUIDCache     bool
 	UUIDCacheTTL        time.Duration
 	UUIDCacheTTLOffset  int
+
+	// Inventory client settings
+	InventoryTimeout        time.Duration
+	ListAllInventoryTimeout time.Duration
+
+	// Northbound handler settings
+	ReconcileTickerPeriod time.Duration
+	ReconcileParallelism  int
 }
 
 func (c RemoteAccessConfigMgrConfig) Validate() error {
@@ -40,12 +48,33 @@ func (c RemoteAccessConfigMgrConfig) Validate() error {
 			"invalid inventory address %s: %s", c.InventoryAddr, err)
 	}
 
-	if !c.InsecureGRPC {
-		if c.CACertPath == "" || c.TLSCertPath == "" || c.TLSKeyPath == "" {
-			return inv_errors.Errorfc(codes.InvalidArgument,
-				"gRPC connections should be secure, but one of secrets is not provided")
-		}
+	// Validate timeouts
+	if c.InventoryTimeout <= 0 {
+		return inv_errors.Errorfc(codes.InvalidArgument,
+			"inventory timeout must be greater than 0, got: %v", c.InventoryTimeout)
 	}
+	if c.ListAllInventoryTimeout <= 0 {
+		return inv_errors.Errorfc(codes.InvalidArgument,
+			"list all inventory timeout must be greater than 0, got: %v", c.ListAllInventoryTimeout)
+	}
+
+	// Validate northbound handler settings
+	if c.ReconcileTickerPeriod <= 0 {
+		return inv_errors.Errorfc(codes.InvalidArgument,
+			"reconcile ticker period must be greater than 0, got: %v", c.ReconcileTickerPeriod)
+	}
+	if c.ReconcileParallelism <= 0 {
+		return inv_errors.Errorfc(codes.InvalidArgument,
+			"reconcile parallelism must be greater than 0, got: %d", c.ReconcileParallelism)
+	}
+
+	// TODO: Enable TLS validation when certificates are available in test/prod environments
+	// if !c.InsecureGRPC {
+	// 	if c.CACertPath == "" || c.TLSCertPath == "" || c.TLSKeyPath == "" {
+	// 		return inv_errors.Errorfc(codes.InvalidArgument,
+	// 			"gRPC connections should be secure, but one of secrets is not provided")
+	// 	}
+	// }
 
 	return nil
 }

@@ -8,7 +8,6 @@ import (
 	"flag"
 	"log"
 	"net"
-	"os"
 	"os/signal"
 	"sync"
 	"syscall"
@@ -21,6 +20,7 @@ import (
 	"github.com/open-edge-platform/infra-core/inventory/v2/pkg/oam"
 	"github.com/open-edge-platform/infra-core/inventory/v2/pkg/policy/rbac"
 	"github.com/open-edge-platform/infra-core/inventory/v2/pkg/tracing"
+	"github.com/open-edge-platform/infra-managers/remote-access/internal/common"
 	"github.com/open-edge-platform/infra-managers/remote-access/internal/handlers"
 	pb "github.com/open-edge-platform/infra-managers/remote-access/pkg/api/rmtaccessmgr/v1"
 	"github.com/open-edge-platform/infra-managers/remote-access/pkg/clients"
@@ -34,16 +34,8 @@ import (
 var zlog = logging.GetLogger("RemoteAccessConfigManagerMain")
 
 var (
-	wg        = sync.WaitGroup{}        // waitgroup so main will wait for all go routines to exit cleanly
-	readyChan = make(chan bool, 1)      // channel to signal the readiness.
-	termChan  = make(chan bool, 1)      // channel to signal termination of main process.
-	sigChan   = make(chan os.Signal, 1) // channel to handle any interrupt signals
-)
-
-var (
-	servaddr   = flag.String(flags.ServerAddress, "0.0.0.0:50005", flags.ServerAddressDescription)
-	invsvcaddr = flag.String(client.InventoryAddress, "localhost:50051", client.InventoryAddressDescription)
-	//invsvcaddr           = flag.String(client.InventoryAddress, "rmtaccessmgr-db:5432", client.InventoryAddressDescription)
+	servaddr             = flag.String(flags.ServerAddress, "0.0.0.0:50005", flags.ServerAddressDescription)
+	invsvcaddr           = flag.String(client.InventoryAddress, "localhost:50051", client.InventoryAddressDescription)
 	oamservaddr          = flag.String(oam.OamServerAddress, "", oam.OamServerAddressDescription)
 	insecureGrpc         = flag.Bool(client.InsecureGrpc, true, client.InsecureGrpcDescription)
 	caCertPath           = flag.String(client.CaCertPath, "", client.CaCertPathDescription)
@@ -61,6 +53,14 @@ var (
 
 	enableMetrics  = flag.Bool(metrics.EnableMetrics, false, metrics.EnableMetricsDescription)
 	metricsAddress = flag.String(metrics.MetricsAddress, metrics.MetricsAddressDefault, metrics.MetricsAddressDescription)
+
+	// Inventory client flags
+	inventoryTimeout        = flag.Duration(common.InventoryTimeout, common.DefaultInventoryTimeoutDuration, common.InventoryTimeoutDescription)
+	listAllInventoryTimeout = flag.Duration(common.ListAllInventoryTimeout, common.DefaultListAllInventoryTimeoutDuration, common.ListAllInventoryTimeoutDescription)
+
+	// Northbound handler flags
+	reconcileTickerPeriod = flag.Duration(common.ReconcileTickerPeriod, common.DefaultReconcileTickerPeriodDuration, common.ReconcileTickerPeriodDescription)
+	reconcileParallelism  = flag.Int(common.ReconcileParallelism, common.DefaultReconcileParallelism, common.ReconcileParallelismDescription)
 )
 
 type server struct {
@@ -72,49 +72,6 @@ type server struct {
 func newServer() *server {
 	return &server{db: make(map[string]*resourcev1.RemoteAccessConfiguration)}
 }
-
-//// CreateResourceAccess — called by API when new access is requested
-//func (s *server) CreateResourceAccess(ctx context.Context, req *servicev1.CreateResourceAccessRequest) (*servicev1.CreateResourceAccessResponse, error) {
-//	if req == nil || req.GetDeviceId() == "" {
-//		return nil, status.Error(codes.InvalidArgument, "device_id is required")
-//	}
-//
-//	if _, err := uuid.Parse(req.GetDeviceId()); err != nil {
-//		return nil, status.Errorf(codes.InvalidArgument, "invalid device_id: %v", err)
-//	}
-//
-//	now := time.Now().UTC()
-//
-//	reversePort := uint32(8000 + len(s.db))
-//
-//	ra := &resourcev1.ResourceAccess{
-//		Uuid:          uuid.NewString(),
-//		DeviceId:      req.GetDeviceId(),
-//		ProxyEndpoint: "http://10.0.2.2:8080",
-//
-//		// Reverse bind port exposed by RAP:
-//		ReverseBindPort: reversePort,
-//
-//		TargetHost: "127.0.0.1",
-//		TargetPort: 22,
-//		SshUser:    "ubuntu",
-//
-//		SessionToken: "admin:secret",
-//
-//		DesiredState:        resourcev1.RemoteAccessState_REMOTE_ACCESS_STATE_ENABLED,
-//		ExpirationTimestamp: uint64(now.Add(time.Hour).Unix()),
-//		TenantId:            "00000000-0000-0000-0000-000000000001",
-//		CreatedAt:           now.Format(time.RFC3339),
-//		UpdatedAt:           now.Format(time.RFC3339),
-//	}
-//
-//	s.mu.Lock()
-//	s.db[ra.DeviceId] = ra
-//	s.mu.Unlock()
-//	log.Printf("📦 Created ResourceAccess: device=%s, reverse_port=%d, uuid=%s", ra.DeviceId, ra.ReverseBindPort, ra.Uuid)
-//
-//	return &servicev1.CreateResourceAccessResponse{WsUrl: "ws://" + ra.TargetHost + ":50052/term", ExpiresAt: ra.ExpirationTimestamp}, nil
-//}
 
 // GetAgentSpec — used by agent to retrieve connection spec
 func (s *server) GetAgentSpec(
@@ -152,18 +109,29 @@ func main() {
 	flag.Parse()
 
 	conf := config.RemoteAccessConfigMgrConfig{
-		EnableTracing:      *enableTracing,
-		EnableMetrics:      *enableMetrics,
-		TraceURL:           *traceURL,
-		InventoryAddr:      *invsvcaddr,
-		CACertPath:         *caCertPath,
-		TLSKeyPath:         *tlsKeyPath,
-		TLSCertPath:        *tlsCertPath,
-		InsecureGRPC:       *insecureGrpc,
-		EnableUUIDCache:    *invCacheUUIDEnable,
-		UUIDCacheTTL:       *invCacheStaleTimeout,
-		UUIDCacheTTLOffset: int(*invCacheStaleTimeoutOffset),
+		EnableTracing:           *enableTracing,
+		EnableMetrics:           *enableMetrics,
+		TraceURL:                *traceURL,
+		InventoryAddr:           *invsvcaddr,
+		CACertPath:              *caCertPath,
+		TLSKeyPath:              *tlsKeyPath,
+		TLSCertPath:             *tlsCertPath,
+		InsecureGRPC:            *insecureGrpc,
+		EnableUUIDCache:         *invCacheUUIDEnable,
+		UUIDCacheTTL:            *invCacheStaleTimeout,
+		UUIDCacheTTLOffset:      int(*invCacheStaleTimeoutOffset),
+		InventoryTimeout:        *inventoryTimeout,
+		ListAllInventoryTimeout: *listAllInventoryTimeout,
+		ReconcileTickerPeriod:   *reconcileTickerPeriod,
+		ReconcileParallelism:    *reconcileParallelism,
 	}
+
+	if err := conf.Validate(); err != nil {
+		zlog.Fatal().Err(err).Msgf("Failed to start due to invalid configuration: %v", conf)
+	}
+
+	zlog.Info().Msgf("Starting Remote Access Manager conf %v", conf)
+
 	rootCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -171,7 +139,7 @@ func main() {
 
 	coreInv, events, err := rmtAccessMgr.StartInvGrpcCli(rootCtx, wg, conf)
 	if err != nil {
-		//
+		zlog.Fatal().Err(err).Msg("failed to start inventory client")
 	}
 
 	raInv, err := clients.NewRAInventoryClient(coreInv, events)
@@ -180,7 +148,7 @@ func main() {
 	}
 
 	// 3) NB handler (reconcileAll + event loop + ticker fallback)
-	nbh, err := handlers.NewNBHandler(raInv, conf.EnableTracing)
+	nbh, err := handlers.NewNBHandler(raInv, conf.EnableTracing, conf.ReconcileTickerPeriod, conf.ReconcileParallelism, conf.InventoryTimeout, conf.ListAllInventoryTimeout)
 	if err != nil {
 		zlog.Fatal().Err(err).Msg("failed to create NB handler")
 	}
@@ -199,10 +167,9 @@ func main() {
 	//lis, err := net.Listen("tcp", ":50051")
 	lis, err := net.Listen("tcp", *servaddr) // np. 0.0.0.0:50001
 	if err != nil {
-		//zlog.Fatal().Err(err).Msgf("failed to listen on %s", conf.ServerAddr)
-		zlog.Fatal().Err(err).Msgf("failed to listen on %s", "50051")
+		zlog.Fatal().Err(err).Msgf("failed to listen on %s", *servaddr)
 	}
-	if err := rmtAccessMgr.StartGrpcSrv(rootCtx, wg, lis, raInv,
+	if err := rmtAccessMgr.StartGrpcSrv(rootCtx, wg, lis, raInv, conf.InventoryTimeout,
 		rmtAccessMgr.EnableTracing(*enableTracing),
 		//rmtAccessMgr.EnableAuth(*enableAuth),
 		//rmtAccessMgr.WithRbacRulesPath(*rbacRules),

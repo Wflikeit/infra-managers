@@ -17,12 +17,13 @@ import (
 )
 
 type Server struct {
-	inv *inv_client.RmtAccessInventoryClient
+	inv              *inv_client.RmtAccessInventoryClient
+	inventoryTimeout time.Duration
 	pb.UnimplementedRmtaccessmgrServiceServer
 }
 
-func NewServer(inv *inv_client.RmtAccessInventoryClient) *Server {
-	return &Server{inv: inv}
+func NewServer(inv *inv_client.RmtAccessInventoryClient, inventoryTimeout time.Duration) *Server {
+	return &Server{inv: inv, inventoryTimeout: inventoryTimeout}
 }
 
 // GetRemoteAccessConfigByGuid: polling endpoint for agent.
@@ -43,7 +44,7 @@ func (s *Server) GetRemoteAccessConfigByGuid(
 	uuid := req.GetUuid()
 
 	// Inventory is source of truth.
-	ra, err := s.inv.GetRemoteAccessConf(ctx, tenantID, uuid)
+	ra, err := s.inv.GetRemoteAccessConf(ctx, tenantID, uuid, s.inventoryTimeout)
 
 	// IMPORTANT: for polling endpoint, "not found" => status=NONE (not gRPC error)
 	if isNotFoundErr(ra, err) { // <- implement based on your inventory error types

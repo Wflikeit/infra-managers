@@ -89,7 +89,7 @@ func TestRmtAccessInventoryClient_GetRemoteAccessConf(t *testing.T) {
 	tenantID := rmtAccess_testing.Tenant1
 
 	t.Run("not found", func(t *testing.T) {
-		got, err := rmtAccessCfgClient.GetRemoteAccessConf(ctx, tenantID, "remoteaccess-deadbeef")
+		got, err := rmtAccessCfgClient.GetRemoteAccessConf(ctx, tenantID, "remoteaccess-deadbeef", 5*time.Second)
 		require.Error(t, err)
 		require.Nil(t, got)
 	})
@@ -97,7 +97,7 @@ func TestRmtAccessInventoryClient_GetRemoteAccessConf(t *testing.T) {
 	t.Run("ok", func(t *testing.T) {
 		rac := dao.CreateRemoteAccessConfiguration(t, tenantID)
 
-		got, err := rmtAccessCfgClient.GetRemoteAccessConf(ctx, tenantID, rac.GetResourceId())
+		got, err := rmtAccessCfgClient.GetRemoteAccessConf(ctx, tenantID, rac.GetResourceId(), 5*time.Second)
 		require.NoError(t, err)
 		require.NotNil(t, got)
 

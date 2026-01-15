@@ -49,7 +49,7 @@ func CreateRemoteAccessMgrClient(tb testing.TB) {
 func CreateRAController(tb testing.TB) {
 	tb.Helper()
 
-	raReconciler, err := reconcilers.NewRAReconciler(RmtAccessCfgClient, false)
+	raReconciler, err := reconcilers.NewRAReconciler(RmtAccessCfgClient, false, clients.DefaultInventoryTimeout)
 	require.NoError(tb, err)
 
 	RAController = rec_v2.NewController[reconcilers.ReconcilerID](raReconciler.Reconcile, rec_v2.WithParallelism(1))
