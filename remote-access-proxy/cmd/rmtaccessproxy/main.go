@@ -15,7 +15,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -284,13 +283,6 @@ func waitPort(addr string, max time.Duration) error {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-}
-
-func envOrDefault(key, def string) string {
-	if v := os.Getenv(key); strings.TrimSpace(v) != "" {
-		return v
-	}
-	return def
 }
 
 func main() {
