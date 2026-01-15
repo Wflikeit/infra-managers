@@ -5,7 +5,6 @@ package clients
 
 import (
 	"context"
-	"flag"
 	"sync"
 	"time"
 
@@ -34,13 +33,6 @@ const (
 var (
 	clientName = "RmtAccessInventoryClient"
 	zlog       = logging.GetLogger(clientName)
-
-	inventoryTimeout        = flag.Duration("invTimeout", DefaultInventoryTimeout, "Inventory API calls timeout")
-	ListAllInventoryTimeout = flag.Duration(
-		"timeoutInventoryListAll",
-		ListAllDefaultTimeout,
-		"Timeout used when listing all resources for a given type from Inventory",
-	)
 )
 
 type RmtAccessInventoryClient struct {
@@ -50,9 +42,15 @@ type RmtAccessInventoryClient struct {
 
 // Options is options for init of the Inventory client.
 type Options struct {
-	InventoryAddress string
-	EnableTracing    bool
-	EnableMetrics    bool
+	InventoryAddress        string
+	EnableTracing           bool
+	EnableMetrics           bool
+	InsecureGRPC            bool
+	CACertPath              string
+	TLSKeyPath              string
+	TLSCertPath             string
+	InventoryTimeout        time.Duration
+	ListAllInventoryTimeout time.Duration
 }
 
 // Option is an Inventory client option.
@@ -78,6 +76,36 @@ func WithEnableMetrics(enableMetrics bool) Option {
 	}
 }
 
+// WithInsecureGRPC sets insecure GRPC mode.
+func WithInsecureGRPC(insecure bool) Option {
+	return func(options *Options) {
+		options.InsecureGRPC = insecure
+	}
+}
+
+// WithTLS sets TLS certificates paths.
+func WithTLS(caCertPath, tlsCertPath, tlsKeyPath string) Option {
+	return func(options *Options) {
+		options.CACertPath = caCertPath
+		options.TLSCertPath = tlsCertPath
+		options.TLSKeyPath = tlsKeyPath
+	}
+}
+
+// WithInventoryTimeout sets inventory timeout.
+func WithInventoryTimeout(timeout time.Duration) Option {
+	return func(options *Options) {
+		options.InventoryTimeout = timeout
+	}
+}
+
+// WithListAllInventoryTimeout sets list all inventory timeout.
+func WithListAllInventoryTimeout(timeout time.Duration) Option {
+	return func(options *Options) {
+		options.ListAllInventoryTimeout = timeout
+	}
+}
+
 // WithOptions sets the Inventory client options.
 func WithOptions(options Options) Option {
 	return func(opts *Options) {
@@ -95,16 +123,27 @@ func NewRAInventoryClientWithOptions(opts ...Option) (*RmtAccessInventoryClient,
 	}
 	eventsWatcher := make(chan *client.WatchEvents, eventsWatcherBufSize)
 	wg := sync.WaitGroup{}
+
+	// Use default timeout if not provided
+	inventoryTimeout := options.InventoryTimeout
+	if inventoryTimeout == 0 {
+		inventoryTimeout = DefaultInventoryTimeout
+	}
+	listAllTimeout := options.ListAllInventoryTimeout
+	if listAllTimeout == 0 {
+		listAllTimeout = ListAllDefaultTimeout
+	}
+
 	clientCfg := client.InventoryClientConfig{
 		Name:                      clientName,
 		Address:                   options.InventoryAddress,
 		EnableRegisterRetry:       false,
 		AbortOnUnknownClientError: true,
 		SecurityCfg: &client.SecurityConfig{
-			Insecure: true,
-			CaPath:   "",
-			CertPath: "",
-			KeyPath:  "",
+			Insecure: options.InsecureGRPC,
+			CaPath:   options.CACertPath,
+			CertPath: options.TLSCertPath,
+			KeyPath:  options.TLSKeyPath,
 		},
 		Events:     eventsWatcher,
 		ClientKind: inv_v1.ClientKind_CLIENT_KIND_RESOURCE_MANAGER,
@@ -147,9 +186,9 @@ func (n *RmtAccessInventoryClient) Stop() {
 	zlog.InfraSec().Info().Msgf("Inventory client stopped")
 }
 
-func (n *RmtAccessInventoryClient) GetRemoteAccessConf(ctx context.Context, tenantID, resourceID string) (
+func (n *RmtAccessInventoryClient) GetRemoteAccessConf(ctx context.Context, tenantID, resourceID string, timeout time.Duration) (
 	*remoteaccessv1.RemoteAccessConfiguration, error) {
-	ctx, cancel := context.WithTimeout(ctx, *inventoryTimeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	// Get the resource and validate
@@ -168,9 +207,9 @@ func (n *RmtAccessInventoryClient) GetRemoteAccessConf(ctx context.Context, tena
 
 // UpdateRemoteAccessConfigState updates an existing  Remote Access Config desired and current state in Inventory.
 func (n *RmtAccessInventoryClient) UpdateRemoteAccessConfigState(ctx context.Context, tenantID, resourceID string,
-	remAccessConf *remoteaccessv1.RemoteAccessConfiguration,
+	remAccessConf *remoteaccessv1.RemoteAccessConfiguration, timeout time.Duration,
 ) error {
-	ctx, cancel := context.WithTimeout(ctx, *inventoryTimeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	// Handcrafted PATCH update and validate before sending to Inventory
 	fieldMask := &fieldmaskpb.FieldMask{
@@ -199,8 +238,8 @@ func (n *RmtAccessInventoryClient) UpdateRemoteAccessConfigState(ctx context.Con
 }
 
 // FindRemoteAccessConfigs finds existing Remote Access Configs in Inventory.
-func (n *RmtAccessInventoryClient) FindRemoteAccessConfigs(ctx context.Context) ([]*client.ResourceTenantIDCarrier, error) {
-	ctx, cancel := context.WithTimeout(ctx, *inventoryTimeout)
+func (n *RmtAccessInventoryClient) FindRemoteAccessConfigs(ctx context.Context, timeout time.Duration) ([]*client.ResourceTenantIDCarrier, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	res, err := util.GetResourceFromKind(inv_v1.ResourceKind_RESOURCE_KIND_RMT_ACCESS_CONF)
 	if err != nil {

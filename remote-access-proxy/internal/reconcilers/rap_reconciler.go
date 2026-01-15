@@ -47,20 +47,23 @@ type RAPRuntime interface {
 }
 
 type RAPReconciler struct {
-	netClient      *clients.RmtAccessInventoryClient
-	runtime        RAPRuntime
-	tracingEnabled bool
+	netClient        *clients.RmtAccessInventoryClient
+	runtime          RAPRuntime
+	tracingEnabled   bool
+	inventoryTimeout time.Duration
 }
 
 func NewRAPReconciler(
 	cl *clients.RmtAccessInventoryClient,
 	runtime RAPRuntime,
 	tracingEnabled bool,
+	inventoryTimeout time.Duration,
 ) (*RAPReconciler, error) {
 	return &RAPReconciler{
-		netClient:      cl,
-		runtime:        runtime,
-		tracingEnabled: tracingEnabled,
+		netClient:        cl,
+		runtime:          runtime,
+		tracingEnabled:   tracingEnabled,
+		inventoryTimeout: inventoryTimeout,
 	}, nil
 }
 
@@ -118,7 +121,7 @@ func (r *RAPReconciler) fetchRemoteAccess(
 	req rec_v2.Request[ReconcilerID],
 ) (*remoteaccessv1.RemoteAccessConfiguration, rec_v2.Directive[ReconcilerID]) {
 
-	ra, err := r.netClient.GetRemoteAccessConf(ctx, tenantID, resourceID)
+	ra, err := r.netClient.GetRemoteAccessConf(ctx, tenantID, resourceID, r.inventoryTimeout)
 	if d := HandleInventoryError(err, req); d != nil {
 		return nil, d
 	}
@@ -261,7 +264,7 @@ func (r *RAPReconciler) markError(
 		ConfigurationStatusTimestamp: uint64(now.Unix()),
 	}
 
-	err := r.netClient.UpdateRemoteAccessConfigState(ctx, tenantID, resourceID, patch)
+	err := r.netClient.UpdateRemoteAccessConfigState(ctx, tenantID, resourceID, patch, r.inventoryTimeout)
 	if d := HandleInventoryError(err, req); d != nil {
 		return d
 	}
@@ -293,7 +296,7 @@ func (r *RAPReconciler) convergeState(
 		ConfigurationStatusTimestamp: uint64(now.Unix()),
 	}
 
-	err := r.netClient.UpdateRemoteAccessConfigState(ctx, tenantID, resourceID, patch)
+	err := r.netClient.UpdateRemoteAccessConfigState(ctx, tenantID, resourceID, patch, r.inventoryTimeout)
 	if d := HandleInventoryError(err, req); d != nil {
 		return d
 	}
