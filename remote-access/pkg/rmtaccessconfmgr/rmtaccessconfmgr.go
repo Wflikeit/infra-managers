@@ -25,11 +25,6 @@ import (
 	"golang.org/x/net/context"
 )
 
-// TODO(max): remove global instances.
-var (
-	invClientInstance inv_client.TenantAwareInventoryClient
-)
-
 const (
 	backoffInterval = 5 * time.Second
 	backoffRetries  = uint64(5)
