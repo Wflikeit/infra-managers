@@ -138,4 +138,5 @@ require (
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
 
+// TODO: Delete once finished
 replace github.com/open-edge-platform/infra-core/inventory/v2 => ../../infra-core/inventory

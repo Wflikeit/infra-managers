@@ -173,8 +173,8 @@ func main() {
 		rmtAccessMgr.EnableTracing(*enableTracing),
 		//rmtAccessMgr.EnableAuth(*enableAuth),
 		//rmtAccessMgr.WithRbacRulesPath(*rbacRules),
-		//rmtAccessMgr.EnableMetrics(*enableMetrics),
-		//rmtAccessMgr.WithMetricsAddress(*metricsAddress),
+		rmtAccessMgr.EnableMetrics(*enableMetrics),
+		rmtAccessMgr.WithMetricsAddress(*metricsAddress),
 	); err != nil {
 		zlog.Fatal().Err(err).Msg("failed to start grpc server")
 	}

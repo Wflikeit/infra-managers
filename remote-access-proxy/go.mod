@@ -143,5 +143,5 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
-
+// TODO: Delete once finished
 replace github.com/open-edge-platform/infra-core/inventory/v2 => ../../infra-core/inventory

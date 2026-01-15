@@ -10,31 +10,29 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/reflection"
+
 	inv_v1 "github.com/open-edge-platform/infra-core/inventory/v2/pkg/api/inventory/v1"
+	inv_client "github.com/open-edge-platform/infra-core/inventory/v2/pkg/client"
 	"github.com/open-edge-platform/infra-core/inventory/v2/pkg/logging"
+	"github.com/open-edge-platform/infra-core/inventory/v2/pkg/metrics"
 	"github.com/open-edge-platform/infra-core/inventory/v2/pkg/tracing"
 	pb "github.com/open-edge-platform/infra-managers/remote-access/pkg/api/rmtaccessmgr/v1"
 	"github.com/open-edge-platform/infra-managers/remote-access/pkg/clients"
 	"github.com/open-edge-platform/infra-managers/remote-access/pkg/config"
 	"golang.org/x/net/context"
-
-	//inv_client "github.com/open-edge-platform/infra-managers/remote-access/pkg/clients"
-	inv_client "github.com/open-edge-platform/infra-core/inventory/v2/pkg/client"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/reflection"
 )
 
 // TODO(max): remove global instances.
 var (
-	invClientInstance       inv_client.TenantAwareInventoryClient
-	AllowHostDiscoveryValue = true // Default value in flag
+	invClientInstance inv_client.TenantAwareInventoryClient
 )
 
 const (
 	backoffInterval = 5 * time.Second
 	backoffRetries  = uint64(5)
-	// SetHostConnectionLost does 2 operation with Inventory, plus we leave some slack time.
-	nOperationInventoryHostConnLost = 2.05
 	// eventsWatcherBufSize is the buffer size for the events channel.
 	eventsWatcherBufSize = 10
 )
@@ -53,10 +51,15 @@ func EnableTracing(v bool) Option {
 	return func(o *Options) { o.enableTracing = v }
 }
 
-func EnableMetrics(addr string) Option {
+func EnableMetrics(enable bool) Option {
 	return func(o *Options) {
-		o.enableMetrics = true
-		o.metricsAddr = addr
+		o.enableMetrics = enable
+	}
+}
+
+func WithMetricsAddress(metricsAddress string) Option {
+	return func(o *Options) {
+		o.metricsAddr = metricsAddress
 	}
 }
 
@@ -79,24 +82,21 @@ func StartGrpcSrv(
 	options := parseOptions(opts...)
 
 	var grpcOpts []grpc.ServerOption
-	//var unaryInts []grpc.UnaryServerInterceptor
+	var unaryInts []grpc.UnaryServerInterceptor
+
+	srvMetrics := metrics.GetServerMetricsWithLatency()
+	if options.enableMetrics {
+		zlog.Info().Msgf("Metrics exporter is enabled")
+		unaryInts = append(unaryInts, srvMetrics.UnaryServerInterceptor())
+	}
 
 	if options.enableTracing {
 		grpcOpts = tracing.EnableGrpcServerTracing(grpcOpts)
 	}
 
-	//srvMetrics := metrics.GetServerMetricsWithLatency()
-	//if options.enableMetrics {
-	//	unaryInts = append(unaryInts, srvMetrics.UnaryServerInterceptor())
-	//}
-	//
-	//unaryInts = append(unaryInts,
-	//	tenant.GetExtractTenantIDInterceptor(tenant.GetAgentsRole()),
-	//)
-	//
-	//grpcOpts = append(grpcOpts,
-	//	grpc.ChainUnaryInterceptor(unaryInts...),
-	//)
+	if len(unaryInts) > 0 {
+		grpcOpts = append(grpcOpts, grpc.ChainUnaryInterceptor(unaryInts...))
+	}
 
 	s := grpc.NewServer(grpcOpts...)
 
@@ -106,13 +106,13 @@ func StartGrpcSrv(
 	)
 	reflection.Register(s)
 
-	//if options.enableMetrics {
-	//	srvMetrics.InitializeMetrics(s)
-	//	metrics.StartMetricsExporter(
-	//		[]prometheus.Collector{srvMetrics},
-	//		metrics.WithListenAddress(options.metricsAddr),
-	//	)
-	//}
+	if options.enableMetrics {
+		srvMetrics.InitializeMetrics(s)
+		metrics.StartMetricsExporter(
+			[]prometheus.Collector{metrics.GetClientMetricsWithLatency(), srvMetrics},
+			metrics.WithListenAddress(options.metricsAddr),
+		)
+	}
 
 	wg.Add(1)
 	go func() {
@@ -141,8 +141,6 @@ func StartInvGrpcCli(
 
 	resourceKinds := []inv_v1.ResourceKind{
 		inv_v1.ResourceKind_RESOURCE_KIND_RMT_ACCESS_CONF,
-		// opcjonalnie, jeśli potrzebujesz doczytywać instance:
-		// inv_v1.ResourceKind_RESOURCE_KIND_INSTANCE,
 	}
 
 	events := make(chan *inv_client.WatchEvents, eventsWatcherBufSize)
