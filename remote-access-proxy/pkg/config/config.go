@@ -27,6 +27,11 @@ type RemoteAccessProxyConfig struct {
 	InventoryTimeout        time.Duration
 	ListAllInventoryTimeout time.Duration
 
+	// Inventory client cache settings
+	EnableUUIDCache    bool
+	UUIDCacheTTL       time.Duration
+	UUIDCacheTTLOffset int
+
 	// Observability settings
 	EnableTracing bool
 	TraceURL      string

@@ -6,13 +6,11 @@ package main
 import (
 	"context"
 	"flag"
-	"log"
 	"net"
 	"os/signal"
 	"sync"
 	"syscall"
 
-	resourcev1 "github.com/open-edge-platform/infra-core/inventory/v2/pkg/api/remoteaccess/v1"
 	"github.com/open-edge-platform/infra-core/inventory/v2/pkg/client"
 	"github.com/open-edge-platform/infra-core/inventory/v2/pkg/flags"
 	"github.com/open-edge-platform/infra-core/inventory/v2/pkg/logging"
@@ -22,13 +20,9 @@ import (
 	"github.com/open-edge-platform/infra-core/inventory/v2/pkg/tracing"
 	"github.com/open-edge-platform/infra-managers/remote-access/internal/common"
 	"github.com/open-edge-platform/infra-managers/remote-access/internal/handlers"
-	pb "github.com/open-edge-platform/infra-managers/remote-access/pkg/api/rmtaccessmgr/v1"
 	"github.com/open-edge-platform/infra-managers/remote-access/pkg/clients"
 	"github.com/open-edge-platform/infra-managers/remote-access/pkg/config"
 	rmtAccessMgr "github.com/open-edge-platform/infra-managers/remote-access/pkg/rmtaccessconfmgr"
-
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 var zlog = logging.GetLogger("RemoteAccessConfigManagerMain")
@@ -63,48 +57,6 @@ var (
 	reconcileParallelism  = flag.Int(common.ReconcileParallelism, common.DefaultReconcileParallelism, common.ReconcileParallelismDescription)
 )
 
-type server struct {
-	pb.UnimplementedRmtaccessmgrServiceServer
-	mu sync.RWMutex
-	db map[string]*resourcev1.RemoteAccessConfiguration
-}
-
-func newServer() *server {
-	return &server{db: make(map[string]*resourcev1.RemoteAccessConfiguration)}
-}
-
-// GetAgentSpec — used by agent to retrieve connection spec
-func (s *server) GetAgentSpec(
-	ctx context.Context,
-	req *pb.GetRemoteAccessConfigByGuidRequest,
-) (*pb.GetResourceAccessConfigResponse, error) {
-	if req == nil || req.Uuid == "" {
-		return nil, status.Error(codes.InvalidArgument, "guid is required")
-	}
-
-	s.mu.RLock()
-	a, ok := s.db[req.GetUuid()]
-	s.mu.RUnlock()
-	if !ok {
-		return nil, status.Error(codes.NotFound, "resource access not found")
-	}
-
-	spec := &pb.AgentRemoteAccessSpec{
-		RemoteAccessProxyEndpoint: a.GetProxyHost(),
-		SessionToken:              a.GetSessionToken(),
-		ReverseBindPort:           a.GetLocalPort(),
-		TargetHost:                a.GetTargetHost(),
-		TargetPort:                a.GetTargetPort(),
-		SshUser:                   a.GetUser(),
-		ExpirationTimestamp:       a.GetExpirationTimestamp(),
-		Uuid:                      a.GetInstance().GetHost().GetUuid(),
-	}
-
-	log.Printf("📦 Returned AgentSpec: reverse_port=%d, uuid=%s", spec.ReverseBindPort)
-
-	return &pb.GetResourceAccessConfigResponse{Spec: spec}, nil
-}
-
 func main() {
 	flag.Parse()
 
@@ -136,6 +88,18 @@ func main() {
 	defer stop()
 
 	wg := &sync.WaitGroup{}
+
+	// OAM server for liveness/readiness probes (gRPC health checks on port 2379)
+	termChan := make(chan bool, 1)
+	readyChan := make(chan bool, 1)
+	if *oamservaddr != "" {
+		wg.Add(1)
+		go func() {
+			if err := oam.StartOamGrpcServer(termChan, readyChan, wg, *oamservaddr, *enableTracing); err != nil {
+				zlog.InfraSec().Fatal().Err(err).Msg("Cannot start Remote Access Manager OAM gRPC server")
+			}
+		}()
+	}
 
 	coreInv, events, err := rmtAccessMgr.StartInvGrpcCli(rootCtx, wg, conf)
 	if err != nil {
@@ -179,8 +143,20 @@ func main() {
 		zlog.Fatal().Err(err).Msg("failed to start grpc server")
 	}
 
-	<-rootCtx.Done()
-	zlog.Info().Msg("Shutdown signal received, waiting for goroutines...")
+	// Signal OAM server that we are ready
+	if readyChan != nil {
+		readyChan <- true
+	}
+
+	// Handle shutdown signals
+	go func() {
+		<-rootCtx.Done()
+		zlog.Info().Msg("Shutdown signal received, closing channels...")
+		if termChan != nil {
+			close(termChan)
+		}
+	}()
+
 	wg.Wait()
 	zlog.Info().Msg("RemoteAccessManager stopped")
 }

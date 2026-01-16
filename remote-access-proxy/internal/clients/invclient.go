@@ -51,6 +51,9 @@ type Options struct {
 	TLSCertPath             string
 	InventoryTimeout        time.Duration
 	ListAllInventoryTimeout time.Duration
+	EnableUUIDCache         bool
+	UUIDCacheTTL            time.Duration
+	UUIDCacheTTLOffset      int
 }
 
 // Option is an Inventory client option.
@@ -106,6 +109,15 @@ func WithListAllInventoryTimeout(timeout time.Duration) Option {
 	}
 }
 
+// WithUUIDCache enables UUID cache with specified TTL and offset.
+func WithUUIDCache(enable bool, ttl time.Duration, offset int) Option {
+	return func(options *Options) {
+		options.EnableUUIDCache = enable
+		options.UUIDCacheTTL = ttl
+		options.UUIDCacheTTLOffset = offset
+	}
+}
+
 // WithOptions sets the Inventory client options.
 func WithOptions(options Options) Option {
 	return func(opts *Options) {
@@ -153,9 +165,11 @@ func NewRAInventoryClientWithOptions(opts ...Option) (*RmtAccessInventoryClient,
 		Wg:            &wg,
 		EnableTracing: options.EnableTracing,
 		EnableMetrics: options.EnableMetrics,
-		//ClientCache: client.InvClientCacheConfig{
-		//	EnableUUIDCache: true,
-		//},
+		ClientCache: client.InvClientCacheConfig{
+			EnableUUIDCache: options.EnableUUIDCache,
+			StaleTime:       options.UUIDCacheTTL,
+			StateTimeOffset: options.UUIDCacheTTLOffset,
+		},
 	}
 	invClient, err := client.NewTenantAwareInventoryClient(ctx, clientCfg)
 	if err != nil {

@@ -60,10 +60,15 @@ var (
 	chiselKeepAlive         = flag.Duration(common.ChiselKeepAlive, common.DefaultChiselKeepAlive, common.ChiselKeepAliveDescription)
 	reverseSSHAddr          = flag.String(common.ReverseSSHAddr, common.DefaultReverseSSHAddr, common.ReverseSSHAddrDescription)
 	reverseSSHWaitTimeout   = flag.Duration(common.ReverseSSHWaitTimeout, common.DefaultReverseSSHWaitTimeout, common.ReverseSSHWaitTimeoutDescription)
-	wg                      = sync.WaitGroup{}
-	readyChan               = make(chan bool, 1)
-	termChan                = make(chan bool, 1)
-	sigChan                 = make(chan os.Signal, 1)
+	invCacheUUIDEnable      = flag.Bool(inv_client.InvCacheUUIDEnable, false, inv_client.InvCacheUUIDEnableDescription)
+	invCacheStaleTimeout    = flag.Duration(
+		inv_client.InvCacheStaleTimeout, inv_client.InvCacheStaleTimeoutDefault, inv_client.InvCacheStaleTimeoutDescription)
+	invCacheStaleTimeoutOffset = flag.Uint(
+		inv_client.InvCacheStaleTimeoutOffset, inv_client.InvCacheStaleTimeoutOffsetDefault, inv_client.InvCacheStaleTimeoutOffsetDescription)
+	wg        = sync.WaitGroup{}
+	readyChan = make(chan bool, 1)
+	termChan  = make(chan bool, 1)
+	sigChan   = make(chan os.Signal, 1)
 )
 
 var (
@@ -100,7 +105,8 @@ func setupOamServer(enableTracing bool, oamservaddr string) {
 				zlog.InfraSec().Fatal().Err(err).Msg("Cannot start Remote Access Proxy OAM gRPC server")
 			}
 		}()
-		readyChan <- true
+		// Don't signal ready here - wait until all services are actually running
+		// readyChan <- true will be sent after all servers start (see main function)
 	}
 }
 
@@ -286,9 +292,9 @@ func waitPort(addr string, max time.Duration) error {
 }
 
 func main() {
+	flag.Parse()
 	// Print a summary of the build
 	printSummary()
-	flag.Parse()
 
 	// Load configuration from flags
 	conf := config.RemoteAccessProxyConfig{
@@ -314,6 +320,9 @@ func main() {
 		ChiselKeepAlive:         *chiselKeepAlive,
 		ReverseSSHAddr:          *reverseSSHAddr,
 		ReverseSSHWaitTimeout:   *reverseSSHWaitTimeout,
+		EnableUUIDCache:         *invCacheUUIDEnable,
+		UUIDCacheTTL:            *invCacheStaleTimeout,
+		UUIDCacheTTLOffset:      int(*invCacheStaleTimeoutOffset),
 	}
 
 	if err := conf.Validate(); err != nil {
@@ -356,6 +365,7 @@ func main() {
 		clients.WithTLS(conf.CACertPath, conf.TLSCertPath, conf.TLSKeyPath),
 		clients.WithInventoryTimeout(conf.InventoryTimeout),
 		clients.WithListAllInventoryTimeout(conf.ListAllInventoryTimeout),
+		clients.WithUUIDCache(conf.EnableUUIDCache, conf.UUIDCacheTTL, conf.UUIDCacheTTLOffset),
 	)
 	if err != nil {
 		zlog.InfraSec().Fatal().Err(err).Msgf("Unable to start Remote Access Proxy Inventory client")
@@ -409,6 +419,13 @@ func main() {
 	}()
 
 	setupOamServer(conf.EnableTracing, conf.OAMServerAddr)
+
+	// Signal OAM server that we are ready after all services started
+	// Wait a brief moment to ensure OAM server has started listening
+	if conf.OAMServerAddr != "" {
+		time.Sleep(100 * time.Millisecond) // Brief delay to ensure OAM server is listening
+		readyChan <- true
+	}
 
 	// Graceful shutdown
 	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
