@@ -88,3 +88,24 @@ integration-infra-stop:
 
 test-integration:
 	$(GOCMD) test -race -p 1 -failfast -count=1 -v ./test/...
+
+#### Docker Targets ####
+
+# TODO: Remove this override once multi-arch support is added to common.mk
+# This is a temporary workaround to enable multi-architecture builds for Remote Access Manager.
+# Once common.mk is updated with multi-arch support, this override should be removed.
+docker-build: ## Build Docker image (override to add multi-arch support)
+	$(GOCMD) mod download all
+	$(GOCMD) mod vendor
+	cp ../common.mk ../version.mk .
+	docker buildx build . -f Dockerfile \
+		--platform linux/amd64,linux/arm64 \
+		-t $(DOCKER_IMG_NAME):$(VERSION) \
+		--build-arg http_proxy="$(http_proxy)" --build-arg HTTP_PROXY="$(HTTP_PROXY)" \
+		--build-arg https_proxy="$(https_proxy)" --build-arg HTTPS_PROXY="$(HTTPS_PROXY)" \
+		--build-arg no_proxy="$(no_proxy)" --build-arg NO_PROXY="$(NO_PROXY)" \
+		--build-arg REPO_URL="$(LABEL_REPO_URL)" \
+		--build-arg VERSION="$(LABEL_VERSION)" \
+		--build-arg REVISION="$(LABEL_REVISION)" \
+		--build-arg BUILD_DATE="$(LABEL_BUILD_DATE)"
+	@rm -rf vendor common.mk version.mk
