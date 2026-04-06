@@ -59,10 +59,3 @@ func evaluateReadiness(ra *remoteaccessv1.RemoteAccessConfiguration, now time.Ti
 
 	return readinessReady, ""
 }
-
-func isNotFoundErr(conf *remoteaccessv1.RemoteAccessConfiguration, err error) bool {
-	if conf == nil {
-		return true
-	}
-	return false
-}

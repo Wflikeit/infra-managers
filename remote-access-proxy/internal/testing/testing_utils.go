@@ -51,7 +51,7 @@ func CreateRAController(tb testing.TB) {
 
 	// Use default timeout for tests
 	inventoryTimeout := clients.DefaultInventoryTimeout
-	raReconciler, err := reconcilers.NewRAPReconciler(RmtAccessCfgClient, nil, false, inventoryTimeout)
+	raReconciler, err := reconcilers.NewRAPReconciler(RmtAccessCfgClient, reconcilers.NewInMemoryRAPRuntime(), false, inventoryTimeout)
 	require.NoError(tb, err)
 	RAController = rec_v2.NewController[reconcilers.ReconcilerID](raReconciler.Reconcile, rec_v2.WithParallelism(1))
 	tb.Cleanup(func() { RAController.Stop() })

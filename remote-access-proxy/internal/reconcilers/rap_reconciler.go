@@ -5,6 +5,7 @@ package reconcilers
 
 import (
 	"context"
+	"hash/fnv"
 	"strings"
 	"time"
 
@@ -34,7 +35,7 @@ type RAPRuntime interface {
 		tenantID string,
 		resourceID string,
 		spec *RAPSpec,
-	) error
+	) (connected bool, err error)
 
 	// DisableSession removes any runtime artifacts associated with the resource.
 	// It MUST be safe to call even if no session exists.
@@ -98,13 +99,24 @@ func (r *RAPReconciler) Reconcile(
 
 	tenantID := req.ID.GetTenantID()
 	resourceID := req.ID.GetResourceID()
+	now := time.Now().UTC()
+
+	if r.runtime == nil {
+		return r.markError(
+			ctx,
+			req,
+			tenantID,
+			resourceID,
+			"rap runtime not configured",
+			now,
+		)
+	}
 
 	ra, d := r.fetchRemoteAccess(ctx, tenantID, resourceID, req)
 	if d != nil {
 		return d
 	}
 
-	now := time.Now().UTC()
 	specStatus := evaluateSpec(ra, now)
 
 	if r.shouldSkip(ra, specStatus) {
@@ -171,6 +183,7 @@ func evaluateSpec(
 	checkExpirationForRAP(ra, now, &fatal, &pending)
 	checkRAPBinding(ra, &pending)
 	checkAgentTarget(ra, &pending)
+	checkAuth(ra, &pending)
 
 	switch {
 	case len(fatal) > 0:
@@ -193,6 +206,19 @@ func (r *RAPReconciler) shouldSkip(
 		ra.GetDesiredState() == ra.GetCurrentState()
 }
 
+func specReadinessString(r SpecReadiness) string {
+	switch r {
+	case SpecReady:
+		return "ready"
+	case SpecPending:
+		return "pending"
+	case SpecInvalid:
+		return "invalid"
+	default:
+		return "unknown"
+	}
+}
+
 func (r *RAPReconciler) reconcileWithSpec(
 	ctx context.Context,
 	req rec_v2.Request[ReconcilerID],
@@ -211,6 +237,15 @@ func (r *RAPReconciler) reconcileWithSpec(
 		spec.Readiness,
 	)
 
+	zlog.Info().
+		Str("tenant_id", tenantID).
+		Str("resource_id", resourceID).
+		Str("readiness", specReadinessString(spec.Readiness)).
+		Str("reason", spec.Reason).
+		Interface("desired", ra.GetDesiredState()).
+		Interface("current", ra.GetCurrentState()).
+		Msg("RAP reconcile")
+
 	switch spec.Readiness {
 
 	case SpecInvalid:
@@ -220,6 +255,13 @@ func (r *RAPReconciler) reconcileWithSpec(
 	case SpecPending:
 		if ra.GetDesiredState() == remoteaccessv1.RemoteAccessState_REMOTE_ACCESS_STATE_DISABLED {
 			_ = r.runtime.DisableSession(ctx, tenantID, resourceID, "desired disabled (pending)")
+			return req.Ack()
+		}
+
+		// Break the bootstrap deadlock: even when spec is still pending, attempt runtime bootstrap
+		// so RAP can populate binding fields in Inventory and unblock RAM readiness.
+		if d := r.tryBootstrapFromPending(ctx, req, tenantID, resourceID, ra, now); d != nil {
+			return d
 		}
 		return req.Ack()
 
@@ -230,7 +272,8 @@ func (r *RAPReconciler) reconcileWithSpec(
 		}
 
 		spec := buildRAPSpec(ra)
-		if err := r.runtime.EnsureSession(ctx, tenantID, resourceID, spec); err != nil {
+		connected, err := r.runtime.EnsureSession(ctx, tenantID, resourceID, spec)
+		if err != nil {
 			return r.markError(
 				ctx,
 				req,
@@ -241,11 +284,143 @@ func (r *RAPReconciler) reconcileWithSpec(
 			)
 		}
 
+		statusText := "remote access configured; waiting for agent connection"
+		if connected {
+			statusText = "remote access connection active"
+		}
+		if d := r.persistBinding(ctx, req, tenantID, resourceID, spec); d != nil {
+			return d
+		}
+		if d := r.setConnectionStatus(ctx, req, tenantID, resourceID, statusText, now); d != nil {
+			return d
+		}
+
 		return r.convergeState(ctx, req, tenantID, resourceID, ra, now)
 
 	default:
 		return req.Ack()
 	}
+}
+
+func (r *RAPReconciler) tryBootstrapFromPending(
+	ctx context.Context,
+	req rec_v2.Request[ReconcilerID],
+	tenantID string,
+	resourceID string,
+	ra *remoteaccessv1.RemoteAccessConfiguration,
+	now time.Time,
+) rec_v2.Directive[ReconcilerID] {
+	// Do not bootstrap until expiration is known and valid.
+	if ra.GetExpirationTimestamp() == 0 || int64(ra.GetExpirationTimestamp()) <= now.Unix() {
+		return nil
+	}
+	spec := buildRAPSpec(ra)
+	applyBootstrapDefaults(spec)
+	connected, err := r.runtime.EnsureSession(ctx, tenantID, resourceID, spec)
+	if err != nil {
+		// Keep reconciliation non-fatal during bootstrap; expose reason in status.
+		if d := r.setConnectionStatus(
+			ctx,
+			req,
+			tenantID,
+			resourceID,
+			"bootstrap pending: "+err.Error(),
+			now,
+		); d != nil {
+			return d
+		}
+		return nil
+	}
+	if d := r.persistBinding(ctx, req, tenantID, resourceID, spec); d != nil {
+		return d
+	}
+	statusText := "remote access configured; waiting for agent connection"
+	if connected {
+		statusText = "remote access connection active"
+	}
+	if d := r.setConnectionStatus(ctx, req, tenantID, resourceID, statusText, now); d != nil {
+		return d
+	}
+	return nil
+}
+
+func applyBootstrapDefaults(spec *RAPSpec) {
+	if spec == nil {
+		return
+	}
+	// Bootstrap defaults for single-session bring-up.
+	// TODO: replace with environment/deployment driven values.
+	if spec.LocalPort == 0 {
+		spec.LocalPort = defaultLocalPort(spec.ResourceID)
+	}
+	if strings.TrimSpace(spec.ProxyHost) == "" {
+		spec.ProxyHost = "remote-access-proxy-ws.kind.internal:443"
+	}
+	if strings.TrimSpace(spec.TargetHost) == "" {
+		spec.TargetHost = "127.0.0.1"
+	}
+	if spec.TargetPort == 0 {
+		spec.TargetPort = 22
+	}
+	if strings.TrimSpace(spec.User) == "" {
+		spec.User = "root"
+	}
+	if strings.TrimSpace(spec.SessionToken) == "" {
+		// Must match current RAP chisel auth setup for initial bring-up.
+		spec.SessionToken = "admin:secret"
+	}
+}
+
+func defaultLocalPort(resourceID string) uint32 {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(resourceID))
+	return 20000 + (h.Sum32() % 10000)
+}
+
+func (r *RAPReconciler) persistBinding(
+	ctx context.Context,
+	req rec_v2.Request[ReconcilerID],
+	tenantID string,
+	resourceID string,
+	spec *RAPSpec,
+) rec_v2.Directive[ReconcilerID] {
+	if spec == nil {
+		return nil
+	}
+	patch := &remoteaccessv1.RemoteAccessConfiguration{
+		ResourceId:   resourceID,
+		LocalPort:    spec.LocalPort,
+		ProxyHost:    spec.ProxyHost,
+		TargetHost:   spec.TargetHost,
+		TargetPort:   spec.TargetPort,
+		User:         spec.User,
+		SessionToken: spec.SessionToken,
+	}
+	err := r.netClient.UpdateRemoteAccessConfigBinding(ctx, tenantID, resourceID, patch, r.inventoryTimeout)
+	if d := HandleInventoryError(err, req); d != nil {
+		return d
+	}
+	return nil
+}
+
+func (r *RAPReconciler) setConnectionStatus(
+	ctx context.Context,
+	req rec_v2.Request[ReconcilerID],
+	tenantID string,
+	resourceID string,
+	statusText string,
+	now time.Time,
+) rec_v2.Directive[ReconcilerID] {
+	patch := &remoteaccessv1.RemoteAccessConfiguration{
+		ResourceId:                   resourceID,
+		ConfigurationStatus:          statusText,
+		ConfigurationStatusTimestamp: uint64(now.Unix()),
+	}
+	err := r.netClient.UpdateRemoteAccessConfigState(ctx, tenantID, resourceID, patch, r.inventoryTimeout)
+	if d := HandleInventoryError(err, req); d != nil {
+		return d
+	}
+	return nil
 }
 
 func (r *RAPReconciler) markError(
@@ -372,6 +547,18 @@ func checkAgentTarget(
 	}
 	if ra.GetTargetPort() == 0 {
 		*pending = append(*pending, "target_port not set")
+	}
+}
+
+func checkAuth(
+	ra *remoteaccessv1.RemoteAccessConfiguration,
+	pending *[]string,
+) {
+	if strings.TrimSpace(ra.GetUser()) == "" {
+		*pending = append(*pending, "user not set")
+	}
+	if strings.TrimSpace(ra.GetSessionToken()) == "" {
+		*pending = append(*pending, "session_token not set")
 	}
 }
 

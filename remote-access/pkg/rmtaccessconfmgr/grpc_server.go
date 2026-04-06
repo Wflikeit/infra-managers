@@ -43,19 +43,18 @@ func (s *Server) GetRemoteAccessConfigByGuid(
 	tenantID := req.GetTenantID()
 	uuid := req.GetUuid()
 
-	// Inventory is source of truth.
-	ra, err := s.inv.GetRemoteAccessConf(ctx, tenantID, uuid, s.inventoryTimeout)
-
-	// IMPORTANT: for polling endpoint, "not found" => status=NONE (not gRPC error)
-	if isNotFoundErr(ra, err) { // <- implement based on your inventory error types
+	// Inventory is source of truth; uuid is host SMBIOS UUID in the tenant.
+	ra, err := s.inv.ResolveRemoteAccessConfiguration(ctx, tenantID, uuid, s.inventoryTimeout)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "inventory resolve remote access config: %v", err)
+	}
+	// Polling: no RAC / unknown host => NONE (not a gRPC error).
+	if ra == nil {
 		return &pb.GetResourceAccessConfigResponse{
 			ObservedAt: timestamppb.Now(),
 			Status:     pb.ConfigStatus_CONFIG_STATUS_NONE,
 			Error:      nil,
 		}, nil
-	}
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "inventory get remote access config: %v", err)
 	}
 
 	now := time.Now().UTC()

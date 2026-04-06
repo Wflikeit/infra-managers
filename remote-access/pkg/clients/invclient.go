@@ -5,9 +5,11 @@ package clients
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
+	computev1 "github.com/open-edge-platform/infra-core/inventory/v2/pkg/api/compute/v1"
 	inv_v1 "github.com/open-edge-platform/infra-core/inventory/v2/pkg/api/inventory/v1"
 	remoteaccessv1 "github.com/open-edge-platform/infra-core/inventory/v2/pkg/api/remoteaccess/v1"
 	"github.com/open-edge-platform/infra-core/inventory/v2/pkg/client"
@@ -223,17 +225,93 @@ func (n *RmtAccessInventoryClient) GetRemoteAccessConf(ctx context.Context, tena
 	return remAccessConf, nil
 }
 
+// ResolveRemoteAccessConfiguration loads the RemoteAccessConfiguration for an edge agent polling by
+// host SMBIOS UUID (compute.v1.HostResource.uuid) within the tenant. Uses Inventory GetHostByUUID, then
+// the RemoteAccessConfiguration linked to that host's instance (at most one; otherwise error).
+// Returns (nil, nil) when the host or RAC does not exist — polling maps this to NONE.
+// Direct fetch by RAC resource_id (rmtacconf-…) remains available via GetRemoteAccessConf for internal callers.
+func (n *RmtAccessInventoryClient) ResolveRemoteAccessConfiguration(ctx context.Context, tenantID, hostUUID string, timeout time.Duration) (*remoteaccessv1.RemoteAccessConfiguration, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	host, err := n.Client.GetHostByUUID(ctx, tenantID, hostUUID)
+	if err != nil {
+		if inv_errors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	filterStr := fmt.Sprintf("%s.%s.%s = %q AND %s = %q",
+		remoteaccessv1.RemoteAccessConfigurationEdgeInstance,
+		computev1.InstanceResourceEdgeHost,
+		computev1.HostResourceFieldResourceId,
+		host.GetResourceId(),
+		remoteaccessv1.RemoteAccessConfigurationFieldTenantId,
+		tenantID,
+	)
+	res, err := util.GetResourceFromKind(inv_v1.ResourceKind_RESOURCE_KIND_RMT_ACCESS_CONF)
+	if err != nil {
+		return nil, err
+	}
+	listResp, err := n.Client.List(ctx, &inv_v1.ResourceFilter{
+		Filter:   filterStr,
+		Resource: res,
+		Limit:    2,
+		Offset:   0,
+	})
+	if err != nil {
+		return nil, err
+	}
+	resources := listResp.GetResources()
+	if len(resources) == 0 {
+		return nil, nil
+	}
+	racID, ok := pickNewestRACResourceID(resources)
+	if !ok {
+		return nil, nil
+	}
+	if len(resources) > 1 {
+		zlog.Warn().Msgf("multiple RemoteAccessConfiguration for host %s (count=%d); using newest by updated_at: %s",
+			host.GetResourceId(), len(resources), racID)
+	}
+	return n.GetRemoteAccessConf(ctx, tenantID, racID, timeout)
+}
+
+// pickNewestRACResourceID chooses one resource_id when List returns several RAC rows for the same host
+// (e.g. stale duplicates). Uses lexicographic RFC3339 on updated_at, then created_at.
+func pickNewestRACResourceID(resources []*inv_v1.GetResourceResponse) (id string, ok bool) {
+	var bestID, bestTS string
+	for _, row := range resources {
+		ra := row.GetResource().GetRemoteAccess()
+		if ra == nil || ra.GetResourceId() == "" {
+			continue
+		}
+		ts := ra.GetUpdatedAt()
+		if ts == "" {
+			ts = ra.GetCreatedAt()
+		}
+		if bestID == "" || ts > bestTS {
+			bestID = ra.GetResourceId()
+			bestTS = ts
+		}
+	}
+	return bestID, bestID != ""
+}
+
 // UpdateRemoteAccessConfigState updates an existing  Remote Access Config desired and current state in Inventory.
 func (n *RmtAccessInventoryClient) UpdateRemoteAccessConfigState(ctx context.Context, tenantID, resourceID string,
 	remAccessConf *remoteaccessv1.RemoteAccessConfiguration, timeout time.Duration,
 ) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	remAccessConf.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	// Handcrafted PATCH update and validate before sending to Inventory
 	fieldMask := &fieldmaskpb.FieldMask{
 		Paths: []string{
-			remoteaccessv1.RemoteAccessConfigurationFieldDesiredState,
 			remoteaccessv1.RemoteAccessConfigurationFieldCurrentState,
+			remoteaccessv1.RemoteAccessConfigurationFieldConfigurationStatus,
+			remoteaccessv1.RemoteAccessConfigurationFieldConfigurationStatusTimestamp,
 			remoteaccessv1.RemoteAccessConfigurationFieldUpdatedAt,
 		},
 	}

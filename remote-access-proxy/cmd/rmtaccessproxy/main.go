@@ -15,6 +15,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -60,6 +62,8 @@ var (
 	chiselKeepAlive         = flag.Duration(common.ChiselKeepAlive, common.DefaultChiselKeepAlive, common.ChiselKeepAliveDescription)
 	reverseSSHAddr          = flag.String(common.ReverseSSHAddr, common.DefaultReverseSSHAddr, common.ReverseSSHAddrDescription)
 	reverseSSHWaitTimeout   = flag.Duration(common.ReverseSSHWaitTimeout, common.DefaultReverseSSHWaitTimeout, common.ReverseSSHWaitTimeoutDescription)
+	sshPrivateKeyPath       = flag.String("sshPrivateKeyPath", "", "Path to SSH private key used by /term (optional)")
+	sshPassword             = flag.String("sshPassword", "zaq12wsx", "Fallback SSH password used by /term when key auth is unavailable")
 	invCacheUUIDEnable      = flag.Bool(inv_client.InvCacheUUIDEnable, false, inv_client.InvCacheUUIDEnableDescription)
 	invCacheStaleTimeout    = flag.Duration(
 		inv_client.InvCacheStaleTimeout, inv_client.InvCacheStaleTimeoutDefault, inv_client.InvCacheStaleTimeoutDescription)
@@ -119,10 +123,36 @@ type wsMsg struct {
 }
 
 // ---- SSH dialer to reverse port ----
-func dialSSH(rows, cols int, term string, reverseSSHAddr string) (*ssh.Client, *ssh.Session, io.WriteCloser, io.Reader, error) {
+func buildSSHAuthMethods(privateKeyPath, password string) []ssh.AuthMethod {
+	methods := make([]ssh.AuthMethod, 0, 2)
+	if privateKeyPath != "" {
+		if keyData, err := os.ReadFile(privateKeyPath); err == nil {
+			if signer, err := ssh.ParsePrivateKey(keyData); err == nil {
+				methods = append(methods, ssh.PublicKeys(signer))
+			}
+		}
+	}
+	if password != "" {
+		methods = append(methods, ssh.Password(password))
+	}
+	return methods
+}
+
+func dialSSH(
+	rows, cols int,
+	term string,
+	reverseSSHAddr string,
+	sshUser string,
+	privateKeyPath string,
+	password string,
+) (*ssh.Client, *ssh.Session, io.WriteCloser, io.Reader, error) {
+	authMethods := buildSSHAuthMethods(privateKeyPath, password)
+	if len(authMethods) == 0 {
+		return nil, nil, nil, nil, fmt.Errorf("no ssh auth methods configured")
+	}
 	sshCfg := &ssh.ClientConfig{
-		User:            "ubuntu",
-		Auth:            []ssh.AuthMethod{ssh.Password("zaq12wsx")},
+		User:            sshUser,
+		Auth:            authMethods,
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		Timeout:         10 * time.Second,
 	}
@@ -184,7 +214,13 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin:     func(r *http.Request) bool { return true },
 }
 
-func makeTermHandler(reverseSSHAddr string, reverseSSHWaitTimeout time.Duration) http.HandlerFunc {
+func makeTermHandler(
+	reverseSSHAddr string,
+	reverseSSHWaitTimeout time.Duration,
+	sshUser string,
+	privateKeyPath string,
+	password string,
+) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
@@ -213,7 +249,15 @@ func makeTermHandler(reverseSSHAddr string, reverseSSHWaitTimeout time.Duration)
 		}
 		_ = conn.SetReadDeadline(time.Time{})
 
-		sshClient, sess, stdin, stdout, err := dialSSH(initRows, initCols, termName, reverseSSHAddr)
+		sshClient, sess, stdin, stdout, err := dialSSH(
+			initRows,
+			initCols,
+			termName,
+			reverseSSHAddr,
+			sshUser,
+			privateKeyPath,
+			password,
+		)
 		if err != nil {
 			errMsg := fmt.Sprintf(`{"type":"stdio","data":"[RAP] ssh error: %s\n"}`, err.Error())
 			_ = conn.WriteMessage(websocket.TextMessage, []byte(errMsg))
@@ -274,6 +318,69 @@ func makeTermHandler(reverseSSHAddr string, reverseSSHWaitTimeout time.Duration)
 		}
 	}
 }
+
+type termRouteConfig struct {
+	ReverseSSHAddr string
+	SSHUser        string
+}
+
+func resolveTermRouteConfig(
+	r *http.Request,
+	defaultAddr string,
+	defaultUser string,
+	netClient *clients.RmtAccessInventoryClient,
+	timeout time.Duration,
+) termRouteConfig {
+	cfg := termRouteConfig{
+		ReverseSSHAddr: defaultAddr,
+		SSHUser:        defaultUser,
+	}
+	if qUser := strings.TrimSpace(r.URL.Query().Get("ssh_user")); qUser != "" {
+		cfg.SSHUser = qUser
+	}
+	if netClient == nil {
+		return cfg
+	}
+	tenantID := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
+	resourceID := strings.TrimSpace(r.URL.Query().Get("resource_id"))
+	if tenantID == "" || resourceID == "" {
+		return cfg
+	}
+	ra, err := netClient.GetRemoteAccessConf(r.Context(), tenantID, resourceID, timeout)
+	if err != nil || ra == nil {
+		return cfg
+	}
+	if ra.GetLocalPort() != 0 {
+		cfg.ReverseSSHAddr = net.JoinHostPort("127.0.0.1", strconv.FormatUint(uint64(ra.GetLocalPort()), 10))
+	}
+	if strings.TrimSpace(r.URL.Query().Get("ssh_user")) == "" {
+		if raUser := strings.TrimSpace(ra.GetUser()); raUser != "" {
+			cfg.SSHUser = raUser
+		}
+	}
+	return cfg
+}
+
+func makeTermHandlerWithInventory(
+	reverseSSHAddr string,
+	reverseSSHWaitTimeout time.Duration,
+	defaultSSHUser string,
+	privateKeyPath string,
+	password string,
+	netClient *clients.RmtAccessInventoryClient,
+	inventoryTimeout time.Duration,
+) http.HandlerFunc {
+	baseHandler := makeTermHandler(reverseSSHAddr, reverseSSHWaitTimeout, defaultSSHUser, privateKeyPath, password)
+	return func(w http.ResponseWriter, r *http.Request) {
+		routeCfg := resolveTermRouteConfig(r, reverseSSHAddr, defaultSSHUser, netClient, inventoryTimeout)
+		if routeCfg.ReverseSSHAddr == reverseSSHAddr && routeCfg.SSHUser == defaultSSHUser {
+			baseHandler(w, r)
+			return
+		}
+		makeTermHandler(routeCfg.ReverseSSHAddr, reverseSSHWaitTimeout, routeCfg.SSHUser, privateKeyPath, password)(w, r)
+	}
+}
+
 
 // ---- utils ----
 func waitPort(addr string, max time.Duration) error {
@@ -404,7 +511,18 @@ func main() {
 
 	// Start WebSocket terminal server
 	mux := http.NewServeMux()
-	mux.HandleFunc("/term", makeTermHandler(conf.ReverseSSHAddr, conf.ReverseSSHWaitTimeout))
+	mux.HandleFunc(
+		"/term",
+		makeTermHandlerWithInventory(
+			conf.ReverseSSHAddr,
+			conf.ReverseSSHWaitTimeout,
+			"vendev",
+			strings.TrimSpace(*sshPrivateKeyPath),
+			strings.TrimSpace(*sshPassword),
+			netClient,
+			conf.InventoryTimeout,
+		),
+	)
 
 	wsSrv := &http.Server{
 		Addr:              conf.WebSocketAddr,

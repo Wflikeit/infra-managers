@@ -1,6 +1,6 @@
 module github.com/open-edge-platform/infra-managers/remote-access-proxy
 
-go 1.24.9
+go 1.25.5
 
 require (
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
@@ -8,6 +8,7 @@ require (
 	github.com/open-edge-platform/cluster-api-provider-intel v1.3.4
 	github.com/open-edge-platform/infra-core/inventory/v2 v2.33.4
 	github.com/open-edge-platform/orch-library/go v0.6.3
+	github.com/prometheus/client_golang v1.23.2
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/crypto v0.45.0
 	google.golang.org/grpc v1.78.0
@@ -95,7 +96,6 @@ require (
 	github.com/open-policy-agent/opa v1.10.1 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
-	github.com/prometheus/client_golang v1.23.2 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.67.2 // indirect
 	github.com/prometheus/procfs v0.19.2 // indirect
@@ -143,5 +143,6 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
+
 // TODO: Delete once finished
 replace github.com/open-edge-platform/infra-core/inventory/v2 => ../../infra-core/inventory

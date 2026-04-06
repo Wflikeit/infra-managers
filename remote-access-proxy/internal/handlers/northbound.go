@@ -42,7 +42,7 @@ func NewNBHandler(netCl *clients.RmtAccessInventoryClient,
 	// Initialize all the reconcilers with their controllers
 	controllers := make(map[inv_v1.ResourceKind]*rec_v2.Controller[reconcilers.ReconcilerID], 1)
 	filters := make(map[inv_v1.ResourceKind]Filter, 1)
-	rmtAccessConfReconciler, err := reconcilers.NewRAPReconciler(netCl, nil, tracingEnabled, inventoryTimeout)
+	rmtAccessConfReconciler, err := reconcilers.NewRAPReconciler(netCl, reconcilers.NewInMemoryRAPRuntime(), tracingEnabled, inventoryTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -139,6 +139,7 @@ func (nbh *NBHandler) reconcileAll() error {
 	if err != nil {
 		return err
 	}
+	zlog.Info().Int("rac_count", len(rmtAccessConfgs)).Msg("RAP full reconcile: listed RemoteAccessConfigurations")
 	for _, rmtAcccessConfID := range rmtAccessConfgs {
 		nbh.reconcileResource(rmtAcccessConfID.GetTenantId(), rmtAcccessConfID.GetResourceId())
 	}

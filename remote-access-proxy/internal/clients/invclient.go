@@ -225,11 +225,13 @@ func (n *RmtAccessInventoryClient) UpdateRemoteAccessConfigState(ctx context.Con
 ) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	remAccessConf.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	// Handcrafted PATCH update and validate before sending to Inventory
 	fieldMask := &fieldmaskpb.FieldMask{
 		Paths: []string{
 			remoteaccessv1.RemoteAccessConfigurationFieldConfigurationStatus,
 			remoteaccessv1.RemoteAccessConfigurationFieldConfigurationStatusTimestamp,
+			remoteaccessv1.RemoteAccessConfigurationFieldUpdatedAt,
 		},
 	}
 	err := util.ValidateMaskAndFilterMessage(remAccessConf, fieldMask, true)
@@ -246,6 +248,48 @@ func (n *RmtAccessInventoryClient) UpdateRemoteAccessConfigState(ctx context.Con
 	if err != nil {
 		zlog.InfraSec().InfraErr(err).Msgf("Unable to update Remote Access Config tenantID=%s, resourceID=%s, UUID=%s",
 			tenantID, remAccessConf.GetResourceId(), remAccessConf.GetInstance().GetHost().GetUuid())
+		return err
+	}
+	return nil
+}
+
+// UpdateRemoteAccessConfigBinding updates RAC binding fields used by RAM/agent readiness.
+func (n *RmtAccessInventoryClient) UpdateRemoteAccessConfigBinding(
+	ctx context.Context,
+	tenantID,
+	resourceID string,
+	remAccessConf *remoteaccessv1.RemoteAccessConfiguration,
+	timeout time.Duration,
+) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	remAccessConf.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+
+	fieldMask := &fieldmaskpb.FieldMask{
+		Paths: []string{
+			remoteaccessv1.RemoteAccessConfigurationFieldLocalPort,
+			remoteaccessv1.RemoteAccessConfigurationFieldProxyHost,
+			remoteaccessv1.RemoteAccessConfigurationFieldTargetHost,
+			remoteaccessv1.RemoteAccessConfigurationFieldTargetPort,
+			remoteaccessv1.RemoteAccessConfigurationFieldUser,
+			remoteaccessv1.RemoteAccessConfigurationFieldSessionToken,
+			remoteaccessv1.RemoteAccessConfigurationFieldUpdatedAt,
+		},
+	}
+	if err := util.ValidateMaskAndFilterMessage(remAccessConf, fieldMask, true); err != nil {
+		return err
+	}
+
+	remAccessConf.ResourceId = resourceID
+	resource := &inv_v1.Resource{
+		Resource: &inv_v1.Resource_RemoteAccess{
+			RemoteAccess: remAccessConf,
+		},
+	}
+	_, err := n.Client.Update(ctx, tenantID, remAccessConf.GetResourceId(), fieldMask, resource)
+	if err != nil {
+		zlog.InfraSec().InfraErr(err).Msgf("Unable to update Remote Access Config binding tenantID=%s, resourceID=%s",
+			tenantID, remAccessConf.GetResourceId())
 		return err
 	}
 	return nil

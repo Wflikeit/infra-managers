@@ -11,7 +11,7 @@ const (
 	ChiselBindAddrDescription = "Chisel server bind address (default: 0.0.0.0)"
 
 	ChiselPort            = "chiselPort"
-	ChiselPortDescription = "Chisel server port (default: 8080)"
+	ChiselPortDescription = "Chisel server port (default: 8082)"
 
 	ChiselKeySeed            = "chiselKeySeed"
 	ChiselKeySeedDescription = "Chisel key seed for server key generation"
@@ -50,7 +50,7 @@ const (
 
 const (
 	DefaultChiselBindAddr = "0.0.0.0"
-	DefaultChiselPort     = "8080"
+	DefaultChiselPort     = "8082"
 	DefaultChiselKeySeed  = "edge-demo-seed"
 	DefaultChiselAuth     = "admin:secret"
 	DefaultWebSocketAddr  = "127.0.0.1:50052"
