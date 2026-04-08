@@ -247,6 +247,16 @@ func (r *RAPReconciler) reconcileWithSpec(
 	spec SpecStatus,
 	now time.Time,
 ) rec_v2.Directive[ReconcilerID] {
+	// Expired and RAM already set ERROR: skip work and avoid noisy Info logs.
+	if isExpiredInvalid(spec) &&
+		ra.GetCurrentState() == remoteaccessv1.RemoteAccessState_REMOTE_ACCESS_STATE_ERROR {
+		zlog.Debug().
+			Str("tenant_id", tenantID).
+			Str("resource_id", resourceID).
+			Msg("RAP: ack skipped work (expired RAC, current_state=ERROR set by RAM)")
+		return req.Ack()
+	}
+
 	zlog.Debug().Msgf(
 		"Reconciling RAP for %s: current=%v desired=%v readiness=%v",
 		resourceID,
@@ -270,6 +280,14 @@ func (r *RAPReconciler) reconcileWithSpec(
 		r.removeChiselUserFromToken(ra.GetSessionToken())
 		r.releaseAllocatedPort(tenantID, resourceID)
 		_ = r.runtime.DisableSession(ctx, tenantID, resourceID, "spec invalid: "+spec.Reason)
+		if isExpiredInvalid(spec) {
+			// RAP may refresh configuration_status (operational text). RAM owns current_state
+			// (ERROR) via UpdateRemoteAccessConfigState with current_state in the field mask.
+			if d := r.setConnectionStatus(ctx, req, tenantID, resourceID, spec.Reason, now); d != nil {
+				return d
+			}
+			return req.Ack()
+		}
 		return r.markError(ctx, req, tenantID, resourceID, spec.Reason, now)
 
 	case SpecPending:
@@ -624,6 +642,11 @@ func checkDesiredState(
 		remoteaccessv1.RemoteAccessState_REMOTE_ACCESS_STATE_UNSPECIFIED {
 		*fatal = append(*fatal, "desired_state is UNSPECIFIED")
 	}
+}
+
+func isExpiredInvalid(spec SpecStatus) bool {
+	return spec.Readiness == SpecInvalid &&
+		strings.Contains(spec.Reason, "expiration_timestamp is in the past")
 }
 
 // Expiration is fatal only when enabling.

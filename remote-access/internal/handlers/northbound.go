@@ -135,8 +135,6 @@ func (nbh *NBHandler) controlLoop(ticker *time.Ticker) {
 
 // Reconcile all resources of interest for this RM.
 func (nbh *NBHandler) reconcileAll() error {
-	zlog.Debug().Msgf("Reconciling all RemoteAccessConfigurations")
-
 	ctx, cancel := context.WithTimeout(context.Background(), nbh.listAllTimeout)
 	defer cancel()
 	// Go backward in the hierarchy.
@@ -144,6 +142,7 @@ func (nbh *NBHandler) reconcileAll() error {
 	if err != nil {
 		return err
 	}
+	zlog.Info().Int("rac_count", len(rmtAccessConfgs)).Msg("RAM full reconcile: listed RemoteAccessConfigurations")
 	for _, rmtAcccessConfID := range rmtAccessConfgs {
 		nbh.reconcileResource(rmtAcccessConfID.GetTenantId(), rmtAcccessConfID.GetResourceId())
 	}

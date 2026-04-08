@@ -118,6 +118,19 @@ func (rar *RAReconciler) shouldSkip(ra *remoteaccessv1.RemoteAccessConfiguration
 	return spec.Readiness == SpecReadinessReady && ra.GetDesiredState() == ra.GetCurrentState()
 }
 
+func ramSpecReadinessString(r SpecReadiness) string {
+	switch r {
+	case SpecReadinessReady:
+		return "ready"
+	case SpecReadinessPending:
+		return "pending"
+	case SpecReadinessInvalid:
+		return "invalid"
+	default:
+		return "unknown"
+	}
+}
+
 func (rar *RAReconciler) reconcileWithSpec(
 	ctx context.Context,
 	req rec_v2.Request[ReconcilerID],
@@ -129,10 +142,14 @@ func (rar *RAReconciler) reconcileWithSpec(
 	tenantID := req.ID.GetTenantID()
 	resourceID := ra.GetResourceId()
 
-	zlog.Debug().Msgf(
-		"Reconciling RA %s, current=%v desired=%v readiness=%v reason=%q",
-		resourceID, ra.GetCurrentState(), ra.GetDesiredState(), spec.Readiness, spec.Reason,
-	)
+	zlog.Info().
+		Str("tenant_id", tenantID).
+		Str("resource_id", resourceID).
+		Str("readiness", ramSpecReadinessString(spec.Readiness)).
+		Str("reason", spec.Reason).
+		Interface("desired", ra.GetDesiredState()).
+		Interface("current", ra.GetCurrentState()).
+		Msg("RAM reconcile")
 
 	switch spec.Readiness {
 	case SpecReadinessInvalid:

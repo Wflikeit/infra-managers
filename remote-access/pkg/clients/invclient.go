@@ -305,14 +305,13 @@ func (n *RmtAccessInventoryClient) UpdateRemoteAccessConfigState(ctx context.Con
 ) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	remAccessConf.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	// Handcrafted PATCH update and validate before sending to Inventory
+	// Omit updated_at from mask: Inventory ent hooks set it on update; sending it in the mask
+	// led to clearEntMutate errors (updated_at / desired_state) and failed RAC state writes.
 	fieldMask := &fieldmaskpb.FieldMask{
 		Paths: []string{
 			remoteaccessv1.RemoteAccessConfigurationFieldCurrentState,
 			remoteaccessv1.RemoteAccessConfigurationFieldConfigurationStatus,
 			remoteaccessv1.RemoteAccessConfigurationFieldConfigurationStatusTimestamp,
-			remoteaccessv1.RemoteAccessConfigurationFieldUpdatedAt,
 		},
 	}
 	err := util.ValidateMaskAndFilterMessage(remAccessConf, fieldMask, true)
