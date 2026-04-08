@@ -36,6 +36,8 @@ enum ConfigStatus {
   CONFIG_STATUS_ERROR = 5;
 }
 
+// When status is CONFIG_STATUS_ERROR, code explains the failure.
+// When status is CONFIG_STATUS_PENDING, code may indicate which Inventory/RAC field is still unset (readiness).
 message ConfigError {
   string code = 2;
 }

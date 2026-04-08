@@ -42,8 +42,9 @@ LABEL org.opencontainers.image.version=${VERSION} \
 COPY --from=build --chown=nobody:nobody /go/src/github.com/open-edge-platform/infra-managers/remote-access-proxy/out/rmtaccessproxy /usr/local/bin/rmtaccessproxy
 
 # RAP requires:
-# - Port 8080: Chisel server endpoint (for agent connections)
-# - Port 8000: Reverse SSH tunnel endpoint
-EXPOSE 8080 8000
+# - Port 8082: Chisel server (agent reverse tunnel)
+# - Port 8080: HTTP + WebSocket /term (rap-api Service targetPort)
+# - Port 8000: optional legacy reverse SSH target (configurable)
+EXPOSE 8080 8082 8000
 
 ENTRYPOINT ["rmtaccessproxy"]

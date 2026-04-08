@@ -30,9 +30,11 @@ import (
 	"github.com/open-edge-platform/infra-core/inventory/v2/pkg/metrics"
 	"github.com/open-edge-platform/infra-core/inventory/v2/pkg/oam"
 	"github.com/open-edge-platform/infra-core/inventory/v2/pkg/tracing"
+	"github.com/open-edge-platform/infra-managers/remote-access-proxy/internal/chiselauth"
 	"github.com/open-edge-platform/infra-managers/remote-access-proxy/internal/clients"
 	"github.com/open-edge-platform/infra-managers/remote-access-proxy/internal/common"
 	"github.com/open-edge-platform/infra-managers/remote-access-proxy/internal/handlers"
+	"github.com/open-edge-platform/infra-managers/remote-access-proxy/internal/reconcilers"
 	"github.com/open-edge-platform/infra-managers/remote-access-proxy/pkg/config"
 	"golang.org/x/crypto/ssh"
 )
@@ -58,7 +60,6 @@ var (
 	chiselBindAddr          = flag.String(common.ChiselBindAddr, common.DefaultChiselBindAddr, common.ChiselBindAddrDescription)
 	chiselPort              = flag.String(common.ChiselPort, common.DefaultChiselPort, common.ChiselPortDescription)
 	chiselKeySeed           = flag.String(common.ChiselKeySeed, common.DefaultChiselKeySeed, common.ChiselKeySeedDescription)
-	chiselAuth              = flag.String(common.ChiselAuth, common.DefaultChiselAuth, common.ChiselAuthDescription)
 	chiselKeepAlive         = flag.Duration(common.ChiselKeepAlive, common.DefaultChiselKeepAlive, common.ChiselKeepAliveDescription)
 	reverseSSHAddr          = flag.String(common.ReverseSSHAddr, common.DefaultReverseSSHAddr, common.ReverseSSHAddrDescription)
 	reverseSSHWaitTimeout   = flag.Duration(common.ReverseSSHWaitTimeout, common.DefaultReverseSSHWaitTimeout, common.ReverseSSHWaitTimeoutDescription)
@@ -381,7 +382,6 @@ func makeTermHandlerWithInventory(
 	}
 }
 
-
 // ---- utils ----
 func waitPort(addr string, max time.Duration) error {
 	deadline := time.Now().Add(max)
@@ -403,6 +403,14 @@ func main() {
 	// Print a summary of the build
 	printSummary()
 
+	// Internal-only Chisel user so the server requires auth (no open mode when user index is empty).
+	chiselBarrierAuth, err := chiselauth.GenerateCredentials()
+	if err != nil {
+		zlog.InfraSec().Fatal().Err(err).Msg("Failed to generate Chisel barrier credentials")
+	}
+	barrierUser, _, _ := strings.Cut(chiselBarrierAuth, ":")
+	zlog.InfraSec().Info().Str("chisel_barrier_user", barrierUser).Msg("Chisel: per-RAC users via reconcile; barrier user not for agents (password not logged)")
+
 	// Load configuration from flags
 	conf := config.RemoteAccessProxyConfig{
 		InventoryAddr:           *inventoryAddress,
@@ -423,7 +431,7 @@ func main() {
 		ChiselBindAddr:          *chiselBindAddr,
 		ChiselPort:              *chiselPort,
 		ChiselKeySeed:           *chiselKeySeed,
-		ChiselAuth:              *chiselAuth,
+		ChiselAuth:              chiselBarrierAuth,
 		ChiselKeepAlive:         *chiselKeepAlive,
 		ReverseSSHAddr:          *reverseSSHAddr,
 		ReverseSSHWaitTimeout:   *reverseSSHWaitTimeout,
@@ -433,10 +441,12 @@ func main() {
 	}
 
 	if err := conf.Validate(); err != nil {
-		zlog.InfraSec().Fatal().Err(err).Msgf("Failed to start due to invalid configuration: %v", conf)
+		zlog.InfraSec().Fatal().Err(err).Msg("Failed to start due to invalid configuration")
 	}
 
-	zlog.Info().Msgf("Starting Remote Access Proxy conf %+v", conf)
+	confForLog := conf
+	confForLog.ChiselAuth = "<redacted>"
+	zlog.Info().Msgf("Starting Remote Access Proxy conf %+v", confForLog)
 
 	// Startup order, respecting deps:
 	// 1. Setup tracing
@@ -463,6 +473,18 @@ func main() {
 			metrics.WithListenAddress(conf.MetricsAddr))
 	}
 
+	chiselCfg := &chserver.Config{
+		KeySeed:   conf.ChiselKeySeed,
+		Auth:      conf.ChiselAuth,
+		Reverse:   true,
+		KeepAlive: conf.ChiselKeepAlive,
+	}
+	chisrv, err := chserver.NewServer(chiselCfg)
+	if err != nil {
+		zlog.Fatal().Err(err).Msg("Failed to create Chisel server")
+	}
+	chiselReg := reconcilers.NewChiselServerRegistrar(chisrv)
+
 	// Connect to Inventory
 	netClient, err := clients.NewRAInventoryClientWithOptions(
 		clients.WithInventoryAddress(conf.InventoryAddr),
@@ -479,7 +501,7 @@ func main() {
 	}
 
 	// Start Northbound Handler with reconcilers
-	nbHandler, err := handlers.NewNBHandler(netClient, conf.EnableTracing, conf.ReconcileTickerPeriod, conf.ReconcileParallelism, conf.InventoryTimeout, conf.ListAllInventoryTimeout)
+	nbHandler, err := handlers.NewNBHandler(netClient, conf.EnableTracing, conf.ReconcileTickerPeriod, conf.ReconcileParallelism, conf.InventoryTimeout, conf.ListAllInventoryTimeout, chiselReg)
 	if err != nil {
 		zlog.InfraSec().Fatal().Err(err).Msgf("Unable to create Northbound Handler")
 	}
@@ -488,20 +510,9 @@ func main() {
 		zlog.InfraSec().Fatal().Err(err).Msgf("Unable to start Northbound Handler")
 	}
 
-	// Start Chisel server for reverse tunneling
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	chiselCfg := &chserver.Config{
-		KeySeed:   conf.ChiselKeySeed,
-		Auth:      conf.ChiselAuth,
-		Reverse:   true,
-		KeepAlive: conf.ChiselKeepAlive,
-	}
-	chisrv, err := chserver.NewServer(chiselCfg)
-	if err != nil {
-		zlog.Fatal().Err(err).Msg("Failed to create Chisel server")
-	}
 	go func() {
 		zlog.Info().Msgf("RAP: Chisel listening on %s:%s", conf.ChiselBindAddr, conf.ChiselPort)
 		if err := chisrv.StartContext(ctx, conf.ChiselBindAddr, conf.ChiselPort); err != nil {

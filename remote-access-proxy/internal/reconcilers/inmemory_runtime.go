@@ -69,4 +69,3 @@ func (r *InMemoryRAPRuntime) DisableSession(
 	r.mu.Unlock()
 	return nil
 }
-

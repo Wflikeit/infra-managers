@@ -16,15 +16,12 @@ const (
 	ChiselKeySeed            = "chiselKeySeed"
 	ChiselKeySeedDescription = "Chisel key seed for server key generation"
 
-	ChiselAuth            = "chiselAuth"
-	ChiselAuthDescription = "Chisel authentication in format user:pass"
-
 	ChiselKeepAlive            = "chiselKeepAlive"
 	ChiselKeepAliveDescription = "Chisel keepalive interval (default: 25s)"
 
 	// WebSocket server flags
 	WebSocketAddr            = "wsAddr"
-	WebSocketAddrDescription = "WebSocket terminal server address (default: 127.0.0.1:50052)"
+	WebSocketAddrDescription = "WebSocket terminal server address (default: 0.0.0.0:8080; must match K8s Service rap-api targetPort)"
 
 	// Reverse SSH flags
 	ReverseSSHAddr            = "reverseSSHAddr"
@@ -51,9 +48,8 @@ const (
 const (
 	DefaultChiselBindAddr = "0.0.0.0"
 	DefaultChiselPort     = "8082"
-	DefaultChiselKeySeed  = "edge-demo-seed"
-	DefaultChiselAuth     = "admin:secret"
-	DefaultWebSocketAddr  = "127.0.0.1:50052"
+	DefaultChiselKeySeed = "edge-demo-seed"
+	DefaultWebSocketAddr = "0.0.0.0:8080"
 	DefaultReverseSSHAddr = "127.0.0.1:8000"
 )
 

@@ -38,11 +38,13 @@ type NBHandler struct {
 // NewNBHandler creates a new NBHandler that supervises the reconciliation
 // of the Northbound (Inventory) resources.
 func NewNBHandler(netCl *clients.RmtAccessInventoryClient,
-	tracingEnabled bool, tickerPeriod time.Duration, parallelism int, inventoryTimeout time.Duration, listAllTimeout time.Duration) (*NBHandler, error) {
+	tracingEnabled bool, tickerPeriod time.Duration, parallelism int, inventoryTimeout time.Duration, listAllTimeout time.Duration,
+	chisel reconcilers.ChiselUserRegistrar,
+) (*NBHandler, error) {
 	// Initialize all the reconcilers with their controllers
 	controllers := make(map[inv_v1.ResourceKind]*rec_v2.Controller[reconcilers.ReconcilerID], 1)
 	filters := make(map[inv_v1.ResourceKind]Filter, 1)
-	rmtAccessConfReconciler, err := reconcilers.NewRAPReconciler(netCl, reconcilers.NewInMemoryRAPRuntime(), tracingEnabled, inventoryTimeout)
+	rmtAccessConfReconciler, err := reconcilers.NewRAPReconciler(netCl, reconcilers.NewInMemoryRAPRuntime(), tracingEnabled, inventoryTimeout, chisel)
 	if err != nil {
 		return nil, err
 	}

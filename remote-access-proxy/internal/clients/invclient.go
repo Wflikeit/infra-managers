@@ -225,13 +225,12 @@ func (n *RmtAccessInventoryClient) UpdateRemoteAccessConfigState(ctx context.Con
 ) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	remAccessConf.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	// Handcrafted PATCH update and validate before sending to Inventory
+	// Handcrafted PATCH update and validate before sending to Inventory.
+	// Do not set or mask updated_at — Inventory rejects client writes to that field.
 	fieldMask := &fieldmaskpb.FieldMask{
 		Paths: []string{
 			remoteaccessv1.RemoteAccessConfigurationFieldConfigurationStatus,
 			remoteaccessv1.RemoteAccessConfigurationFieldConfigurationStatusTimestamp,
-			remoteaccessv1.RemoteAccessConfigurationFieldUpdatedAt,
 		},
 	}
 	err := util.ValidateMaskAndFilterMessage(remAccessConf, fieldMask, true)
@@ -263,7 +262,6 @@ func (n *RmtAccessInventoryClient) UpdateRemoteAccessConfigBinding(
 ) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	remAccessConf.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 
 	fieldMask := &fieldmaskpb.FieldMask{
 		Paths: []string{
@@ -273,7 +271,6 @@ func (n *RmtAccessInventoryClient) UpdateRemoteAccessConfigBinding(
 			remoteaccessv1.RemoteAccessConfigurationFieldTargetPort,
 			remoteaccessv1.RemoteAccessConfigurationFieldUser,
 			remoteaccessv1.RemoteAccessConfigurationFieldSessionToken,
-			remoteaccessv1.RemoteAccessConfigurationFieldUpdatedAt,
 		},
 	}
 	if err := util.ValidateMaskAndFilterMessage(remAccessConf, fieldMask, true); err != nil {

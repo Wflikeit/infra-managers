@@ -5,13 +5,15 @@ package reconcilers
 
 import (
 	"context"
-	"hash/fnv"
+	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/open-edge-platform/cluster-api-provider-intel/pkg/tracing"
 	remoteaccessv1 "github.com/open-edge-platform/infra-core/inventory/v2/pkg/api/remoteaccess/v1"
 	"github.com/open-edge-platform/infra-core/inventory/v2/pkg/logging"
+	"github.com/open-edge-platform/infra-managers/remote-access-proxy/internal/chiselauth"
 	"github.com/open-edge-platform/infra-managers/remote-access-proxy/internal/clients"
 	rec_v2 "github.com/open-edge-platform/orch-library/go/pkg/controller/v2"
 )
@@ -52,6 +54,10 @@ type RAPReconciler struct {
 	runtime          RAPRuntime
 	tracingEnabled   bool
 	inventoryTimeout time.Duration
+	chisel           ChiselUserRegistrar
+	portAllocMu      sync.Mutex
+	resourceToPort   map[string]uint32
+	usedPorts        map[uint32]string
 }
 
 func NewRAPReconciler(
@@ -59,14 +65,26 @@ func NewRAPReconciler(
 	runtime RAPRuntime,
 	tracingEnabled bool,
 	inventoryTimeout time.Duration,
+	chisel ChiselUserRegistrar,
 ) (*RAPReconciler, error) {
+	if chisel == nil {
+		chisel = noopChiselRegistrar{}
+	}
 	return &RAPReconciler{
 		netClient:        cl,
 		runtime:          runtime,
 		tracingEnabled:   tracingEnabled,
 		inventoryTimeout: inventoryTimeout,
+		chisel:           chisel,
+		resourceToPort:   make(map[string]uint32),
+		usedPorts:        make(map[uint32]string),
 	}, nil
 }
+
+const (
+	localPortRangeStart uint32 = 21000
+	localPortRangeEnd   uint32 = 21999
+)
 
 // RAPSpec is a pure runtime view of RemoteAccessConfiguration.
 // It contains only fields required by the proxy runtime.
@@ -144,6 +162,7 @@ func (r *RAPReconciler) fetchRemoteAccess(
 			"RemoteAccessConfiguration %s not found, cleaning up runtime",
 			resourceID,
 		)
+		r.releaseAllocatedPort(tenantID, resourceID)
 		_ = r.runtime.DisableSession(ctx, tenantID, resourceID, "inventory record missing")
 		return nil, req.Ack()
 	}
@@ -228,7 +247,6 @@ func (r *RAPReconciler) reconcileWithSpec(
 	spec SpecStatus,
 	now time.Time,
 ) rec_v2.Directive[ReconcilerID] {
-
 	zlog.Debug().Msgf(
 		"Reconciling RAP for %s: current=%v desired=%v readiness=%v",
 		resourceID,
@@ -249,11 +267,15 @@ func (r *RAPReconciler) reconcileWithSpec(
 	switch spec.Readiness {
 
 	case SpecInvalid:
+		r.removeChiselUserFromToken(ra.GetSessionToken())
+		r.releaseAllocatedPort(tenantID, resourceID)
 		_ = r.runtime.DisableSession(ctx, tenantID, resourceID, "spec invalid: "+spec.Reason)
 		return r.markError(ctx, req, tenantID, resourceID, spec.Reason, now)
 
 	case SpecPending:
 		if ra.GetDesiredState() == remoteaccessv1.RemoteAccessState_REMOTE_ACCESS_STATE_DISABLED {
+			r.removeChiselUserFromToken(ra.GetSessionToken())
+			r.releaseAllocatedPort(tenantID, resourceID)
 			_ = r.runtime.DisableSession(ctx, tenantID, resourceID, "desired disabled (pending)")
 			return req.Ack()
 		}
@@ -267,11 +289,23 @@ func (r *RAPReconciler) reconcileWithSpec(
 
 	case SpecReady:
 		if ra.GetDesiredState() == remoteaccessv1.RemoteAccessState_REMOTE_ACCESS_STATE_DISABLED {
+			r.removeChiselUserFromToken(ra.GetSessionToken())
+			r.releaseAllocatedPort(tenantID, resourceID)
 			_ = r.runtime.DisableSession(ctx, tenantID, resourceID, "desired disabled")
 			return r.convergeState(ctx, req, tenantID, resourceID, ra, now)
 		}
 
 		spec := buildRAPSpec(ra)
+		if err := r.syncChiselFromToken(spec.SessionToken); err != nil {
+			return r.markError(
+				ctx,
+				req,
+				tenantID,
+				resourceID,
+				"chisel user sync: "+err.Error(),
+				now,
+			)
+		}
 		connected, err := r.runtime.EnsureSession(ctx, tenantID, resourceID, spec)
 		if err != nil {
 			return r.markError(
@@ -315,7 +349,19 @@ func (r *RAPReconciler) tryBootstrapFromPending(
 		return nil
 	}
 	spec := buildRAPSpec(ra)
-	applyBootstrapDefaults(spec)
+	if err := r.applyBootstrapDefaults(tenantID, resourceID, spec); err != nil {
+		if d := r.setConnectionStatus(
+			ctx,
+			req,
+			tenantID,
+			resourceID,
+			"bootstrap pending: "+err.Error(),
+			now,
+		); d != nil {
+			return d
+		}
+		return nil
+	}
 	connected, err := r.runtime.EnsureSession(ctx, tenantID, resourceID, spec)
 	if err != nil {
 		// Keep reconciliation non-fatal during bootstrap; expose reason in status.
@@ -344,14 +390,20 @@ func (r *RAPReconciler) tryBootstrapFromPending(
 	return nil
 }
 
-func applyBootstrapDefaults(spec *RAPSpec) {
+func (r *RAPReconciler) applyBootstrapDefaults(tenantID, resourceID string, spec *RAPSpec) error {
 	if spec == nil {
-		return
+		return nil
 	}
 	// Bootstrap defaults for single-session bring-up.
-	// TODO: replace with environment/deployment driven values.
+	// Local port is allocated from a fixed range without collisions in a single RAP replica.
 	if spec.LocalPort == 0 {
-		spec.LocalPort = defaultLocalPort(spec.ResourceID)
+		port, err := r.allocateOrGetLocalPort(tenantID, resourceID)
+		if err != nil {
+			return err
+		}
+		spec.LocalPort = port
+	} else {
+		r.reserveKnownPort(tenantID, resourceID, spec.LocalPort)
 	}
 	if strings.TrimSpace(spec.ProxyHost) == "" {
 		spec.ProxyHost = "remote-access-proxy-ws.kind.internal:443"
@@ -366,15 +418,86 @@ func applyBootstrapDefaults(spec *RAPSpec) {
 		spec.User = "root"
 	}
 	if strings.TrimSpace(spec.SessionToken) == "" {
-		// Must match current RAP chisel auth setup for initial bring-up.
-		spec.SessionToken = "admin:secret"
+		user := chiselauth.UsernameForRAC(resourceID)
+		pass, err := chiselauth.GeneratePasswordHex()
+		if err != nil {
+			return err
+		}
+		if err := r.chisel.EnsureUser(user, pass); err != nil {
+			return fmt.Errorf("chisel EnsureUser: %w", err)
+		}
+		spec.SessionToken = user + ":" + pass
+	} else if err := r.syncChiselFromToken(spec.SessionToken); err != nil {
+		return err
 	}
+	return nil
 }
 
-func defaultLocalPort(resourceID string) uint32 {
-	h := fnv.New32a()
-	_, _ = h.Write([]byte(resourceID))
-	return 20000 + (h.Sum32() % 10000)
+func (r *RAPReconciler) syncChiselFromToken(sessionToken string) error {
+	sessionToken = strings.TrimSpace(sessionToken)
+	if sessionToken == "" {
+		return nil
+	}
+	user, pass, ok := strings.Cut(sessionToken, ":")
+	if !ok || strings.TrimSpace(user) == "" || pass == "" {
+		return fmt.Errorf("session_token must be user:pass")
+	}
+	return r.chisel.EnsureUser(user, pass)
+}
+
+func (r *RAPReconciler) removeChiselUserFromToken(sessionToken string) {
+	user, _, ok := strings.Cut(strings.TrimSpace(sessionToken), ":")
+	if !ok || user == "" {
+		return
+	}
+	r.chisel.RemoveUser(user)
+}
+
+func (r *RAPReconciler) allocateOrGetLocalPort(tenantID, resourceID string) (uint32, error) {
+	key := sessionKey(tenantID, resourceID)
+	r.portAllocMu.Lock()
+	defer r.portAllocMu.Unlock()
+
+	if p, ok := r.resourceToPort[key]; ok {
+		return p, nil
+	}
+
+	for p := localPortRangeStart; p <= localPortRangeEnd; p++ {
+		if _, used := r.usedPorts[p]; used {
+			continue
+		}
+		r.resourceToPort[key] = p
+		r.usedPorts[p] = key
+		return p, nil
+	}
+
+	return 0, fmt.Errorf("no free local_port in range %d-%d", localPortRangeStart, localPortRangeEnd)
+}
+
+func (r *RAPReconciler) reserveKnownPort(tenantID, resourceID string, port uint32) {
+	key := sessionKey(tenantID, resourceID)
+	r.portAllocMu.Lock()
+	defer r.portAllocMu.Unlock()
+
+	if current, ok := r.resourceToPort[key]; ok {
+		if current == port {
+			return
+		}
+		delete(r.usedPorts, current)
+	}
+	r.resourceToPort[key] = port
+	r.usedPorts[port] = key
+}
+
+func (r *RAPReconciler) releaseAllocatedPort(tenantID, resourceID string) {
+	key := sessionKey(tenantID, resourceID)
+	r.portAllocMu.Lock()
+	defer r.portAllocMu.Unlock()
+
+	if p, ok := r.resourceToPort[key]; ok {
+		delete(r.resourceToPort, key)
+		delete(r.usedPorts, p)
+	}
 }
 
 func (r *RAPReconciler) persistBinding(
