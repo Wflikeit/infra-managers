@@ -53,6 +53,10 @@ func NewNBHandler(netCl *clients.RmtAccessInventoryClient,
 	// Initialize the associated filters
 	filters[inv_v1.ResourceKind_RESOURCE_KIND_RMT_ACCESS_CONF] = filterEvents
 	// Note that the resourceID from the events will provide the mapping
+	listAllTO := listAllTimeout
+	if listAllTO == 0 {
+		listAllTO = clients.ListAllDefaultTimeout
+	}
 	nbHandler := &NBHandler{
 		Controllers:    controllers,
 		Filters:        filters,
@@ -60,7 +64,7 @@ func NewNBHandler(netCl *clients.RmtAccessInventoryClient,
 		wg:             &sync.WaitGroup{},
 		sigTerm:        make(chan bool),
 		tickerPeriod:   tickerPeriod,
-		listAllTimeout: clients.ListAllDefaultTimeout, // Use default for now, can be passed as parameter
+		listAllTimeout: listAllTO,
 	}
 	return nbHandler, nil
 }

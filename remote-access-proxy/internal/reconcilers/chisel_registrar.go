@@ -3,7 +3,11 @@
 
 package reconcilers
 
-import chserver "github.com/jpillora/chisel/server"
+import (
+	"errors"
+
+	chserver "github.com/jpillora/chisel/server"
+)
 
 // ChiselUserRegistrar registers per-RAC Chisel users (must match RAC session_token user:pass).
 type ChiselUserRegistrar interface {
@@ -16,8 +20,14 @@ type noopChiselRegistrar struct{}
 func (noopChiselRegistrar) EnsureUser(user, pass string) error { return nil }
 func (noopChiselRegistrar) RemoveUser(user string)             {}
 
+// chiselUserBackend matches *chserver.Server AddUser/DeleteUser (per-RAC user index).
+type chiselUserBackend interface {
+	AddUser(user, pass string, addrs ...string) error
+	DeleteUser(user string)
+}
+
 type chiselServerRegistrar struct {
-	srv *chserver.Server
+	backend chiselUserBackend
 }
 
 // NewChiselServerRegistrar wraps the Chisel server for per-RAC AddUser/DeleteUser.
@@ -25,14 +35,20 @@ func NewChiselServerRegistrar(srv *chserver.Server) ChiselUserRegistrar {
 	if srv == nil {
 		return noopChiselRegistrar{}
 	}
-	return &chiselServerRegistrar{srv: srv}
+	return &chiselServerRegistrar{backend: srv}
 }
 
 // EnsureUser adds or replaces a user. Pattern ".*" allows reverse remotes for tunnel setup.
 func (c *chiselServerRegistrar) EnsureUser(user, pass string) error {
-	return c.srv.AddUser(user, pass, ".*")
+	if c == nil || c.backend == nil {
+		return errors.New("chisel registrar: nil backend")
+	}
+	return c.backend.AddUser(user, pass, ".*")
 }
 
 func (c *chiselServerRegistrar) RemoveUser(user string) {
-	c.srv.DeleteUser(user)
+	if c == nil || c.backend == nil {
+		return
+	}
+	c.backend.DeleteUser(user)
 }

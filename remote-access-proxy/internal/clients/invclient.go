@@ -38,6 +38,9 @@ var (
 type RmtAccessInventoryClient struct {
 	Client  client.TenantAwareInventoryClient
 	Watcher chan *client.WatchEvents
+	// Defaults used when a method is called with timeout <= 0 (WithInventoryTimeout / WithListAllInventoryTimeout).
+	defaultInventoryTimeout time.Duration
+	defaultListAllTimeout   time.Duration
 }
 
 // Options is options for init of the Inventory client.
@@ -126,6 +129,8 @@ func WithOptions(options Options) Option {
 }
 
 // NewRAInventoryClientWithOptions creates a client by instantiating a new Inventory client. To be used in production.
+// InventoryTimeout / ListAllInventoryTimeout from options are stored on the wrapper and used when RPC methods
+// are called with timeout <= 0 (see inventoryCallTimeout / listAllCallTimeout); zero applies package defaults.
 func NewRAInventoryClientWithOptions(opts ...Option) (*RmtAccessInventoryClient, error) {
 	// Misc preps for the client instantiation
 	ctx := context.Background()
@@ -135,16 +140,6 @@ func NewRAInventoryClientWithOptions(opts ...Option) (*RmtAccessInventoryClient,
 	}
 	eventsWatcher := make(chan *client.WatchEvents, eventsWatcherBufSize)
 	wg := sync.WaitGroup{}
-
-	// Use default timeout if not provided
-	inventoryTimeout := options.InventoryTimeout
-	if inventoryTimeout == 0 {
-		inventoryTimeout = DefaultInventoryTimeout
-	}
-	listAllTimeout := options.ListAllInventoryTimeout
-	if listAllTimeout == 0 {
-		listAllTimeout = ListAllDefaultTimeout
-	}
 
 	clientCfg := client.InventoryClientConfig{
 		Name:                      clientName,
@@ -176,7 +171,26 @@ func NewRAInventoryClientWithOptions(opts ...Option) (*RmtAccessInventoryClient,
 		return nil, err
 	}
 	zlog.InfraSec().Info().Msgf("Inventory client started")
-	return NewRAInventoryClient(invClient, eventsWatcher)
+	return newRmtAccessInventoryClient(invClient, eventsWatcher, options.InventoryTimeout, options.ListAllInventoryTimeout)
+}
+
+func newRmtAccessInventoryClient(
+	invClient client.TenantAwareInventoryClient,
+	watcher chan *client.WatchEvents,
+	inventoryTimeout, listAllTimeout time.Duration,
+) (*RmtAccessInventoryClient, error) {
+	if inventoryTimeout == 0 {
+		inventoryTimeout = DefaultInventoryTimeout
+	}
+	if listAllTimeout == 0 {
+		listAllTimeout = ListAllDefaultTimeout
+	}
+	return &RmtAccessInventoryClient{
+		Client:                  invClient,
+		Watcher:                 watcher,
+		defaultInventoryTimeout: inventoryTimeout,
+		defaultListAllTimeout:   listAllTimeout,
+	}, nil
 }
 
 // NewRAInventoryClient creates a client that wraps an existing Inventory client. Mainly for testing.
@@ -185,11 +199,21 @@ func NewRAInventoryClient(
 	watcher chan *client.WatchEvents) (
 	*RmtAccessInventoryClient, error,
 ) {
-	rmtAccessCl := &RmtAccessInventoryClient{
-		Client:  invClient,
-		Watcher: watcher,
+	return newRmtAccessInventoryClient(invClient, watcher, DefaultInventoryTimeout, ListAllDefaultTimeout)
+}
+
+func (n *RmtAccessInventoryClient) inventoryCallTimeout(d time.Duration) time.Duration {
+	if d > 0 {
+		return d
 	}
-	return rmtAccessCl, nil
+	return n.defaultInventoryTimeout
+}
+
+func (n *RmtAccessInventoryClient) listAllCallTimeout(d time.Duration) time.Duration {
+	if d > 0 {
+		return d
+	}
+	return n.defaultListAllTimeout
 }
 
 // Stop stops the client.
@@ -202,7 +226,7 @@ func (n *RmtAccessInventoryClient) Stop() {
 
 func (n *RmtAccessInventoryClient) GetRemoteAccessConf(ctx context.Context, tenantID, resourceID string, timeout time.Duration) (
 	*remoteaccessv1.RemoteAccessConfiguration, error) {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	ctx, cancel := context.WithTimeout(ctx, n.inventoryCallTimeout(timeout))
 	defer cancel()
 
 	// Get the resource and validate
@@ -223,13 +247,14 @@ func (n *RmtAccessInventoryClient) GetRemoteAccessConf(ctx context.Context, tena
 func (n *RmtAccessInventoryClient) UpdateRemoteAccessConfigState(ctx context.Context, tenantID, resourceID string,
 	remAccessConf *remoteaccessv1.RemoteAccessConfiguration, timeout time.Duration,
 ) error {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	ctx, cancel := context.WithTimeout(ctx, n.inventoryCallTimeout(timeout))
 	defer cancel()
 	// Handcrafted PATCH update and validate before sending to Inventory.
 	// Do not set or mask updated_at — Inventory rejects client writes to that field.
 	fieldMask := &fieldmaskpb.FieldMask{
 		Paths: []string{
 			remoteaccessv1.RemoteAccessConfigurationFieldConfigurationStatus,
+			remoteaccessv1.RemoteAccessConfigurationFieldConfigurationStatusIndicator,
 			remoteaccessv1.RemoteAccessConfigurationFieldConfigurationStatusTimestamp,
 		},
 	}
@@ -245,8 +270,12 @@ func (n *RmtAccessInventoryClient) UpdateRemoteAccessConfigState(ctx context.Con
 	}
 	_, err = n.Client.Update(ctx, tenantID, remAccessConf.GetResourceId(), fieldMask, resource)
 	if err != nil {
+		hostUUID := ""
+		if inst := remAccessConf.GetInstance(); inst != nil {
+			hostUUID = inst.GetHost().GetUuid()
+		}
 		zlog.InfraSec().InfraErr(err).Msgf("Unable to update Remote Access Config tenantID=%s, resourceID=%s, UUID=%s",
-			tenantID, remAccessConf.GetResourceId(), remAccessConf.GetInstance().GetHost().GetUuid())
+			tenantID, remAccessConf.GetResourceId(), hostUUID)
 		return err
 	}
 	return nil
@@ -260,7 +289,7 @@ func (n *RmtAccessInventoryClient) UpdateRemoteAccessConfigBinding(
 	remAccessConf *remoteaccessv1.RemoteAccessConfiguration,
 	timeout time.Duration,
 ) error {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	ctx, cancel := context.WithTimeout(ctx, n.inventoryCallTimeout(timeout))
 	defer cancel()
 
 	fieldMask := &fieldmaskpb.FieldMask{
@@ -294,7 +323,7 @@ func (n *RmtAccessInventoryClient) UpdateRemoteAccessConfigBinding(
 
 // FindRemoteAccessConfigs finds existing Remote Access Configs in Inventory.
 func (n *RmtAccessInventoryClient) FindRemoteAccessConfigs(ctx context.Context, timeout time.Duration) ([]*client.ResourceTenantIDCarrier, error) {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	ctx, cancel := context.WithTimeout(ctx, n.listAllCallTimeout(timeout))
 	defer cancel()
 	res, err := util.GetResourceFromKind(inv_v1.ResourceKind_RESOURCE_KIND_RMT_ACCESS_CONF)
 	if err != nil {

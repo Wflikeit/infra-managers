@@ -1,0 +1,16 @@
+## SPDX-FileCopyrightText: (C) 2025 Intel Corporation
+## SPDX-License-Identifier: Apache-2.0
+---
+fail-on-missing: true
+issue-845-fix: true
+resolve-type-alias: false
+disable-version-string: true
+dir: internal/wsterm/mocks
+outpkg: mocks
+filename: mock_inventory_rac_getter.go
+mockname: InventoryRACGetter
+with-expecter: true
+packages:
+  github.com/open-edge-platform/infra-managers/remote-access-proxy/internal/wsterm:
+    interfaces:
+      InventoryRACGetter:
