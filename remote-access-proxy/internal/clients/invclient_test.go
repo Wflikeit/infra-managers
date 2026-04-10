@@ -1,8 +1,6 @@
 // SPDX-FileCopyrightText: (C) 2025 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build integration
-
 package clients_test
 
 import (

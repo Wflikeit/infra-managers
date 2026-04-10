@@ -1,8 +1,6 @@
 // SPDX-FileCopyrightText: (C) 2025 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build integration
-
 package reconcilers
 
 import (
@@ -13,13 +11,41 @@ import (
 	"testing"
 	"time"
 
+	inv_v1 "github.com/open-edge-platform/infra-core/inventory/v2/pkg/api/inventory/v1"
 	inv_testing "github.com/open-edge-platform/infra-core/inventory/v2/pkg/testing"
 	"github.com/open-edge-platform/infra-managers/remote-access-proxy/internal/clients"
-	raptest "github.com/open-edge-platform/infra-managers/remote-access-proxy/internal/testing"
 	"github.com/stretchr/testify/require"
 
 	rec_v2 "github.com/open-edge-platform/orch-library/go/pkg/controller/v2"
 )
+
+// Same tenant UUID as internal/testing (cannot import that package here: it imports reconcilers → import cycle).
+const integrationTestTenant1 = "11111111-1111-1111-1111-111111111111"
+
+// testRAPInventoryClientName must match internal/testing client registration pattern for RM + RMT_ACCESS_CONF.
+const testRAPInventoryClientName = "TestNetInventoryClient"
+
+var integrationRmtAccessCfgClient *clients.RmtAccessInventoryClient
+
+func createRAPInventoryClientForTest(tb testing.TB) {
+	tb.Helper()
+	resourceKinds := []inv_v1.ResourceKind{inv_v1.ResourceKind_RESOURCE_KIND_RMT_ACCESS_CONF}
+	err := inv_testing.CreateClient(testRAPInventoryClientName, inv_v1.ClientKind_CLIENT_KIND_RESOURCE_MANAGER, resourceKinds, "")
+	require.NoError(tb, err)
+
+	cli, err := clients.NewRAInventoryClient(
+		inv_testing.TestClients[testRAPInventoryClientName].GetTenantAwareInventoryClient(),
+		inv_testing.TestClientsEvents[testRAPInventoryClientName],
+	)
+	require.NoError(tb, err)
+	integrationRmtAccessCfgClient = cli
+	tb.Cleanup(func() {
+		integrationRmtAccessCfgClient.Stop()
+		integrationRmtAccessCfgClient = nil
+		delete(inv_testing.TestClients, testRAPInventoryClientName)
+		delete(inv_testing.TestClientsEvents, testRAPInventoryClientName)
+	})
+}
 
 func TestMain(m *testing.M) {
 	wd, err := os.Getwd()
@@ -39,14 +65,14 @@ func TestMain(m *testing.M) {
 func arrangeRAPInventoryAndDAO(t *testing.T) *inv_testing.InvResourceDAO {
 	t.Helper()
 	dao := inv_testing.NewInvResourceDAOOrFail(t)
-	raptest.CreateRemoteAccessMgrClient(t)
+	createRAPInventoryClientForTest(t)
 	return dao
 }
 
 func newTestRAPReconciler(t *testing.T) *RAPReconciler {
 	t.Helper()
 	rec, err := NewRAPReconciler(
-		raptest.RmtAccessCfgClient,
+		integrationRmtAccessCfgClient,
 		NewInMemoryRAPRuntime(),
 		false,
 		clients.DefaultInventoryTimeout,
@@ -64,7 +90,7 @@ func requireAck(t *testing.T, d rec_v2.Directive[ReconcilerID]) {
 
 func TestSpec_RAPReconcile_after_RAC_create_persists_binding(t *testing.T) {
 	dao := arrangeRAPInventoryAndDAO(t)
-	rac := dao.CreateRemoteAccessConfiguration(t, raptest.Tenant1)
+	rac := dao.CreateRemoteAccessConfiguration(t, integrationTestTenant1)
 	tenantID := rac.GetTenantId()
 	resID := rac.GetResourceId()
 
@@ -76,7 +102,7 @@ func TestSpec_RAPReconcile_after_RAC_create_persists_binding(t *testing.T) {
 	d := rec.Reconcile(ctx, req)
 	requireAck(t, d)
 
-	cli := raptest.RmtAccessCfgClient
+	cli := integrationRmtAccessCfgClient
 	got, err := cli.GetRemoteAccessConf(ctx, tenantID, resID, clients.DefaultInventoryTimeout)
 	require.NoError(t, err)
 	require.NotNil(t, got)
@@ -94,7 +120,7 @@ func TestSpec_RAPReconcile_after_RAC_create_persists_binding(t *testing.T) {
 
 func TestSpec_RAPReconcile_second_pass_is_ack_and_stable_binding(t *testing.T) {
 	dao := arrangeRAPInventoryAndDAO(t)
-	rac := dao.CreateRemoteAccessConfiguration(t, raptest.Tenant1)
+	rac := dao.CreateRemoteAccessConfiguration(t, integrationTestTenant1)
 	tenantID := rac.GetTenantId()
 	resID := rac.GetResourceId()
 
@@ -105,7 +131,7 @@ func TestSpec_RAPReconcile_second_pass_is_ack_and_stable_binding(t *testing.T) {
 
 	requireAck(t, rec.Reconcile(ctx, req))
 
-	cli := raptest.RmtAccessCfgClient
+	cli := integrationRmtAccessCfgClient
 	afterFirst, err := cli.GetRemoteAccessConf(ctx, tenantID, resID, clients.DefaultInventoryTimeout)
 	require.NoError(t, err)
 	port1 := afterFirst.GetLocalPort()
@@ -184,5 +210,5 @@ func TestSpec_RAP_RAM_when_connection_inactive_ram_deletes_rac(t *testing.T) {
 }
 
 func TestSpec_RAPReconcile_inventory_watcher_controller_path(t *testing.T) {
-	t.Skip("TODO: raptest.CreateRAController + AssertReconcile pattern (internal/testing/testing_utils.go) — event → Reconcile ID from watcher.")
+	t.Skip("TODO: CreateRAController + AssertReconcile pattern (see internal/testing/testing_utils.go) — event → Reconcile ID from watcher.")
 }
