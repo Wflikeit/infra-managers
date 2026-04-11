@@ -44,7 +44,7 @@ func NewNBHandler(netCl *clients.RmtAccessInventoryClient,
 	// Initialize all the reconcilers with their controllers
 	controllers := make(map[inv_v1.ResourceKind]*rec_v2.Controller[reconcilers.ReconcilerID], 1)
 	filters := make(map[inv_v1.ResourceKind]Filter, 1)
-	rmtAccessConfReconciler, err := reconcilers.NewRAPReconciler(netCl, reconcilers.NewInMemoryRAPRuntime(), tracingEnabled, inventoryTimeout, chisel)
+	rmtAccessConfReconciler, err := reconcilers.NewRAPReconciler(netCl, reconcilers.NewDefaultRAPRuntime("127.0.0.1"), tracingEnabled, inventoryTimeout, chisel)
 	if err != nil {
 		return nil, err
 	}
@@ -149,6 +149,9 @@ func (nbh *NBHandler) reconcileAll() error {
 	for _, rmtAcccessConfID := range rmtAccessConfgs {
 		nbh.reconcileResource(rmtAcccessConfID.GetTenantId(), rmtAcccessConfID.GetResourceId())
 	}
+	if len(rmtAccessConfgs) > 0 {
+		zlog.Info().Int("rac_count", len(rmtAccessConfgs)).Msg("RAP full reconcile: finished dispatching controller.Reconcile for each listed RAC")
+	}
 	return nil
 }
 
@@ -165,10 +168,20 @@ func (nbh *NBHandler) reconcileResource(tenantID, resourceID string) {
 		zlog.InfraSec().InfraError("Unhandled resource %s", utils.FormatTenantResourceID(tenantID, resourceID)).Msgf("")
 		return
 	}
+	zlog.Info().
+		Str("tenant_id", tenantID).
+		Str("resource_id", resourceID).
+		Str("resource_kind", expectedKind.String()).
+		Msg("RAP: invoking controller.Reconcile (loads RAC from inventory; see RAPReconciler logs for skip/full path)")
 	err = controller.Reconcile(reconcilers.NewReconcilerID(tenantID, resourceID))
 	if err != nil {
 		zlog.InfraSec().InfraErr(err).Msgf("Unable to reconcile resource %s", resourceID)
+		return
 	}
+	zlog.Info().
+		Str("tenant_id", tenantID).
+		Str("resource_id", resourceID).
+		Msg("RAP: controller.Reconcile completed without error")
 }
 
 // Helper function to filter events.

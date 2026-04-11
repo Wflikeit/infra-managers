@@ -251,10 +251,10 @@ func (n *RmtAccessInventoryClient) UpdateRemoteAccessConfigState(ctx context.Con
 	defer cancel()
 	// Handcrafted PATCH update and validate before sending to Inventory.
 	// Do not set or mask updated_at — Inventory rejects client writes to that field.
+	// RAP owns operational narrative only (§12.12 B): never patch configuration_status_indicator from RAP.
 	fieldMask := &fieldmaskpb.FieldMask{
 		Paths: []string{
 			remoteaccessv1.RemoteAccessConfigurationFieldConfigurationStatus,
-			remoteaccessv1.RemoteAccessConfigurationFieldConfigurationStatusIndicator,
 			remoteaccessv1.RemoteAccessConfigurationFieldConfigurationStatusTimestamp,
 		},
 	}
@@ -281,7 +281,10 @@ func (n *RmtAccessInventoryClient) UpdateRemoteAccessConfigState(ctx context.Con
 	return nil
 }
 
-// UpdateRemoteAccessConfigBinding updates RAC binding fields used by RAM/agent readiness.
+// UpdateRemoteAccessConfigBinding updates RAP-owned RAC fields used for topology + Chisel auth readiness:
+// ports, proxy/target, SSH user, and session_token (user:pass). Token is bundled in one mask with binding
+// so bootstrap can persist a generated credential together with local_port in a single write; see
+// reconcilers.persistBinding.
 func (n *RmtAccessInventoryClient) UpdateRemoteAccessConfigBinding(
 	ctx context.Context,
 	tenantID,

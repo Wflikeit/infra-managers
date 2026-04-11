@@ -166,6 +166,7 @@ func TestSpec_RmtAccessInventoryClient_UpdateRemoteAccessConfigState(t *testing.
 
 		base, err := cli.GetRemoteAccessConf(ctx, tenantID, rac.GetResourceId(), time.Second)
 		require.NoError(t, err)
+		indicatorBefore := base.GetConfigurationStatusIndicator()
 		ts := uint64(time.Now().Unix())
 		patch := base
 		patch.ConfigurationStatus = "rap-test-status"
@@ -176,12 +177,12 @@ func TestSpec_RmtAccessInventoryClient_UpdateRemoteAccessConfigState(t *testing.
 		err = cli.UpdateRemoteAccessConfigState(ctx, tenantID, rac.GetResourceId(), patch, 5*time.Second)
 		require.NoError(t, err)
 
-		// assert
+		// assert — RAP client masks only operational text + timestamp (not indicator).
 		after, err := cli.GetRemoteAccessConf(ctx, tenantID, rac.GetResourceId(), time.Second)
 		require.NoError(t, err)
 		assert.Equal(t, "rap-test-status", after.GetConfigurationStatus())
-		assert.Equal(t, statusv1.StatusIndication_STATUS_INDICATION_IDLE, after.GetConfigurationStatusIndicator())
 		assert.Equal(t, ts, after.GetConfigurationStatusTimestamp())
+		assert.Equal(t, indicatorBefore, after.GetConfigurationStatusIndicator())
 	})
 
 	t.Run("when_resource_id_does_not_exist_then_Update_returns_error", func(t *testing.T) {
@@ -193,7 +194,6 @@ func TestSpec_RmtAccessInventoryClient_UpdateRemoteAccessConfigState(t *testing.
 		defer cancel()
 		patch := &remoteaccessv1.RemoteAccessConfiguration{
 			ConfigurationStatus:          "x",
-			ConfigurationStatusIndicator: statusv1.StatusIndication_STATUS_INDICATION_ERROR,
 			ConfigurationStatusTimestamp: 1,
 		}
 		// act
