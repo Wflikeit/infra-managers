@@ -307,11 +307,11 @@ func (n *RmtAccessInventoryClient) UpdateRemoteAccessConfigState(ctx context.Con
 	defer cancel()
 	// Omit updated_at from mask: Inventory ent hooks set it on update; sending it in the mask
 	// led to clearEntMutate errors (updated_at / desired_state) and failed RAC state writes.
+	// RAM owns current_state + configuration_status_indicator (§12.12 B); operational text is RAP-only.
 	fieldMask := &fieldmaskpb.FieldMask{
 		Paths: []string{
 			remoteaccessv1.RemoteAccessConfigurationFieldCurrentState,
-			remoteaccessv1.RemoteAccessConfigurationFieldConfigurationStatus,
-			remoteaccessv1.RemoteAccessConfigurationFieldConfigurationStatusTimestamp,
+			remoteaccessv1.RemoteAccessConfigurationFieldConfigurationStatusIndicator,
 		},
 	}
 	err := util.ValidateMaskAndFilterMessage(remAccessConf, fieldMask, true)
