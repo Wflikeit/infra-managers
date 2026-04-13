@@ -9,6 +9,7 @@ import (
 	"time"
 
 	remoteaccessv1 "github.com/open-edge-platform/infra-core/inventory/v2/pkg/api/remoteaccess/v1"
+	"github.com/open-edge-platform/infra-core/inventory/v2/pkg/tenant"
 	pb "github.com/open-edge-platform/infra-managers/remote-access/pkg/api/rmtaccessmgr/v1"
 	inv_client "github.com/open-edge-platform/infra-managers/remote-access/pkg/clients"
 	"google.golang.org/grpc/codes"
@@ -40,7 +41,10 @@ func (s *Server) GetRemoteAccessConfigByGuid(
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	tenantID := req.GetTenantID()
+	tenantID, present := tenant.GetTenantIDFromContext(ctx)
+	if !present {
+		return nil, status.Error(codes.Unauthenticated, "Tenant ID is not present in context")
+	}
 	uuid := req.GetUuid()
 
 	// Inventory is source of truth; uuid is host SMBIOS UUID in the tenant.

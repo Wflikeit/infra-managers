@@ -49,7 +49,8 @@
 <a name="rmtaccessmgr-v1-ConfigError"></a>
 
 ### ConfigError
-
+When status is CONFIG_STATUS_ERROR, code explains the failure.
+When status is CONFIG_STATUS_PENDING, code may indicate which Inventory/RAC field is still unset (readiness).
 
 
 | Field | Type | Label | Description |
@@ -70,7 +71,6 @@
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
 | uuid | [string](#string) |  |  |
-| tenantID | [string](#string) |  |  |
 
 
 

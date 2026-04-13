@@ -50,6 +50,7 @@ func main() {
 	tenant := flag.String("tenant", os.Getenv("TENANT_ID"), "Tenant UUID")
 	instance := flag.String("instance", os.Getenv("INSTANCE_RESOURCE_ID"), "Existing Instance resource_id (inst-…)")
 	deleteID := flag.String("delete", os.Getenv("DELETE_RAC_ID"), "Optional: hard-delete this RemoteAccessConfiguration resource_id (e.g. rmtacconf-…); ignores NotFound")
+	printInstForRAC := flag.String("print-instance-for-rac", os.Getenv("PRINT_INSTANCE_FOR_RAC"), "Optional: print Instance resource_id for this RAC (stdout only) and exit")
 	cleanupHost := flag.String("cleanup-for-host", os.Getenv("CLEANUP_RAC_HOST_ID"), "Optional: delete all RAC for this Host resource_id in -tenant (fixes ambiguous count>1)")
 	listTenant := flag.Bool("list", false, "List all RemoteAccessConfiguration resources for -tenant (count + resource_id) and exit")
 	cleanupAllRAC := flag.Bool("cleanup-all-rac", false, "Hard-delete every RemoteAccessConfiguration in -tenant (dangerous)")
@@ -59,13 +60,14 @@ func main() {
 	if *tenant == "" {
 		log.Fatal("required: -tenant (or env TENANT_ID)")
 	}
-	if !*listTenant && *instance == "" && *cleanupHost == "" && *deleteID == "" && !*cleanupAllRAC {
-		log.Fatal("required: -instance (or env INSTANCE_RESOURCE_ID), or -cleanup-for-host, or -list, or -delete, or -cleanup-all-rac\n" +
+	if !*listTenant && *instance == "" && *cleanupHost == "" && *deleteID == "" && !*cleanupAllRAC && *printInstForRAC == "" {
+		log.Fatal("required: -instance (or env INSTANCE_RESOURCE_ID), or -cleanup-for-host, or -list, or -delete, or -cleanup-all-rac, or -print-instance-for-rac\n" +
 			"Example: go run . -tenant <uuid> -instance inst-abc1234\n" +
 			"Cleanup:  go run . -tenant <uuid> -cleanup-for-host host-xxxxxxxx\n" +
 			"List:     go run . -tenant <uuid> -list\n" +
 			"Hard-del: go run . -tenant <uuid> -delete rmtacconf-xxxxxxxx\n" +
-			"All RAC:  go run . -tenant <uuid> -cleanup-all-rac")
+			"All RAC:  go run . -tenant <uuid> -cleanup-all-rac\n" +
+			"Inst id:  go run . -tenant <uuid> -print-instance-for-rac rmtacconf-xxxxxxxx")
 	}
 
 	ctx := context.Background()
@@ -86,6 +88,23 @@ func main() {
 		log.Fatal(err)
 	}
 	defer func() { _ = apiCli.Close() }()
+
+	if *printInstForRAC != "" {
+		getResp, err := apiCli.Get(ctx, *tenant, *printInstForRAC)
+		if err != nil {
+			log.Fatal(err)
+		}
+		ra := getResp.GetResource().GetRemoteAccess()
+		if ra == nil {
+			log.Fatalf("get %s: not a remote_access resource", *printInstForRAC)
+		}
+		inst := ra.GetInstance()
+		if inst == nil || inst.GetResourceId() == "" {
+			log.Fatalf("RAC %s: missing instance.resource_id", *printInstForRAC)
+		}
+		fmt.Println(inst.GetResourceId())
+		return
+	}
 
 	if *listTenant {
 		if err := listAllRACForTenant(ctx, apiCli, *tenant); err != nil {

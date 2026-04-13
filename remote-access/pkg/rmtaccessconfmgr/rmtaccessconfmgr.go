@@ -18,6 +18,7 @@ import (
 	inv_client "github.com/open-edge-platform/infra-core/inventory/v2/pkg/client"
 	"github.com/open-edge-platform/infra-core/inventory/v2/pkg/logging"
 	"github.com/open-edge-platform/infra-core/inventory/v2/pkg/metrics"
+	"github.com/open-edge-platform/infra-core/inventory/v2/pkg/tenant"
 	"github.com/open-edge-platform/infra-core/inventory/v2/pkg/tracing"
 	pb "github.com/open-edge-platform/infra-managers/remote-access/pkg/api/rmtaccessmgr/v1"
 	"github.com/open-edge-platform/infra-managers/remote-access/pkg/clients"
@@ -85,13 +86,13 @@ func StartGrpcSrv(
 		unaryInts = append(unaryInts, srvMetrics.UnaryServerInterceptor())
 	}
 
+	unaryInts = append(unaryInts, tenant.GetExtractTenantIDInterceptor(tenant.GetAgentsRole()))
+
 	if options.enableTracing {
 		grpcOpts = tracing.EnableGrpcServerTracing(grpcOpts)
 	}
 
-	if len(unaryInts) > 0 {
-		grpcOpts = append(grpcOpts, grpc.ChainUnaryInterceptor(unaryInts...))
-	}
+	grpcOpts = append(grpcOpts, grpc.ChainUnaryInterceptor(unaryInts...))
 
 	s := grpc.NewServer(grpcOpts...)
 
