@@ -217,8 +217,6 @@ func TestSpec_RmtAccessInventoryClient_UpdateRemoteAccessConfigBinding(t *testin
 		require.NoError(t, err)
 		base.LocalPort = 2222
 		base.ProxyHost = "rap.test.local"
-		base.TargetHost = "127.0.0.1"
-		base.TargetPort = 22
 		base.User = "testuser"
 		base.SessionToken = "tok"
 
@@ -231,8 +229,6 @@ func TestSpec_RmtAccessInventoryClient_UpdateRemoteAccessConfigBinding(t *testin
 		require.NoError(t, err)
 		assert.Equal(t, uint32(2222), after.GetLocalPort())
 		assert.Equal(t, "rap.test.local", after.GetProxyHost())
-		assert.Equal(t, "127.0.0.1", after.GetTargetHost())
-		assert.Equal(t, uint32(22), after.GetTargetPort())
 		assert.Equal(t, "testuser", after.GetUser())
 		assert.Equal(t, "tok", after.GetSessionToken())
 	})

@@ -282,7 +282,7 @@ func (n *RmtAccessInventoryClient) UpdateRemoteAccessConfigState(ctx context.Con
 }
 
 // UpdateRemoteAccessConfigBinding updates RAP-owned RAC fields used for topology + Chisel auth readiness:
-// ports, proxy/target, SSH user, and session_token (user:pass). Token is bundled in one mask with binding
+// ports, proxy host, SSH user, and session_token (user:pass). Token is bundled in one mask with binding
 // so bootstrap can persist a generated credential together with local_port in a single write; see
 // reconcilers.persistBinding.
 func (n *RmtAccessInventoryClient) UpdateRemoteAccessConfigBinding(
@@ -299,8 +299,6 @@ func (n *RmtAccessInventoryClient) UpdateRemoteAccessConfigBinding(
 		Paths: []string{
 			remoteaccessv1.RemoteAccessConfigurationFieldLocalPort,
 			remoteaccessv1.RemoteAccessConfigurationFieldProxyHost,
-			remoteaccessv1.RemoteAccessConfigurationFieldTargetHost,
-			remoteaccessv1.RemoteAccessConfigurationFieldTargetPort,
 			remoteaccessv1.RemoteAccessConfigurationFieldUser,
 			remoteaccessv1.RemoteAccessConfigurationFieldSessionToken,
 		},

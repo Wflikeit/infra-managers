@@ -108,9 +108,7 @@ func mapInventoryToAgentResponse(
 	spec := &pb.AgentRemoteAccessSpec{
 		RemoteAccessProxyEndpoint: ra.GetProxyHost(), // should be agent-reachable RAP endpoint (ws/wss)
 		SessionToken:              ra.GetSessionToken(),
-		ReverseBindPort:           ra.GetLocalPort(),  // RAP reverse bind port
-		TargetHost:                ra.GetTargetHost(), // usually 127.0.0.1
-		TargetPort:                ra.GetTargetPort(), // usually 22
+		ReverseBindPort:           ra.GetLocalPort(), // RAP reverse bind port
 		SshUser:                   ra.GetUser(),
 		ExpirationTimestamp:       ra.GetExpirationTimestamp(),
 		Uuid:                      ra.GetResourceId(), // ra id

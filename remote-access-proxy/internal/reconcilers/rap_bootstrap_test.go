@@ -33,8 +33,6 @@ func TestSpec_applyBootstrapDefaults_generates_port_token_and_defaults(t *testin
 		TenantID:     "tenant-1",
 		LocalPort:    0,
 		ProxyHost:    "",
-		TargetHost:   "",
-		TargetPort:   0,
 		User:         "",
 		SessionToken: "",
 		DesiredState: remoteaccessv1.RemoteAccessState_REMOTE_ACCESS_STATE_ENABLED,
@@ -43,8 +41,6 @@ func TestSpec_applyBootstrapDefaults_generates_port_token_and_defaults(t *testin
 	require.NoError(t, err)
 	assert.NotZero(t, spec.LocalPort)
 	assert.Equal(t, "remote-access-proxy-ws.kind.internal:443", spec.ProxyHost)
-	assert.Equal(t, "127.0.0.1", spec.TargetHost)
-	assert.Equal(t, uint32(22), spec.TargetPort)
 	assert.Equal(t, "root", spec.User)
 	require.Contains(t, spec.SessionToken, ":")
 	require.GreaterOrEqual(t, len(ch.ensureCalls), 1)
@@ -62,8 +58,6 @@ func TestSpec_applyBootstrapDefaults_existing_session_token_calls_EnsureUser(t *
 		TenantID:     "t",
 		LocalPort:    21050, // must be within localPortAllocator range (see rap_local_port_allocator.go)
 		ProxyHost:    "p",
-		TargetHost:   "h",
-		TargetPort:   22,
 		User:         "root",
 		SessionToken: "  alice:secret  ",
 		DesiredState: remoteaccessv1.RemoteAccessState_REMOTE_ACCESS_STATE_ENABLED,

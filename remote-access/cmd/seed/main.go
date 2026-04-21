@@ -14,13 +14,14 @@
 //   - instance.resource_id: required; must reference an existing Instance in that tenant.
 //   - expiration_timestamp: required; Unix seconds; must be > now+10m and < now+24h (store rules).
 //   - desired_state:        e.g. REMOTE_ACCESS_STATE_ENABLED.
-//   - local_port, proxy_host, user, session_token, target_host/target_port: optional at create;
+//   - local_port, proxy_host, user, session_token: optional at create;
 //     RAM / RMs typically fill binding fields when reconciling.
 //
 // See: infra-core/inventory/api/inventory/v1/inventory.proto (CreateResourceRequest)
-//      infra-core/inventory/api/remoteaccess/v1/remoteaccess.proto
-//      infra-core/inventory/internal/store/remoteaccess_validator.go
-//      infra-core/inventory/internal/inventory/inventory.go (case *Resource_RemoteAccess)
+//
+//	infra-core/inventory/api/remoteaccess/v1/remoteaccess.proto
+//	infra-core/inventory/internal/store/remoteaccess_validator.go
+//	infra-core/inventory/internal/inventory/inventory.go (case *Resource_RemoteAccess)
 //
 // Removing RAC: Inventory DeleteResource only soft-deletes (desired_state=DELETED). This tool
 // completes hard delete via UpdateResource (current_state=DELETED) as CLIENT_KIND_RESOURCE_MANAGER,

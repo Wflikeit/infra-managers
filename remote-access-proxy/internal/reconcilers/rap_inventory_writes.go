@@ -59,8 +59,6 @@ func (r *RAPReconciler) persistBinding(
 		ResourceId:   resourceID,
 		LocalPort:    spec.LocalPort,
 		ProxyHost:    spec.ProxyHost,
-		TargetHost:   spec.TargetHost,
-		TargetPort:   spec.TargetPort,
 		User:         spec.User,
 		SessionToken: spec.SessionToken,
 	}

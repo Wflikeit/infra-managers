@@ -46,10 +46,7 @@ func evaluateReadiness(ra *remoteaccessv1.RemoteAccessConfiguration, now time.Ti
 		return readinessPending, "proxy_host_missing"
 	}
 
-	// Pending until manager fills agent target + auth
-	if strings.TrimSpace(ra.GetTargetHost()) == "" || ra.GetTargetPort() == 0 {
-		return readinessPending, "target_missing"
-	}
+	// Pending until manager fills auth (edge Chisel target is agent-local config, not inventory)
 	if strings.TrimSpace(ra.GetUser()) == "" {
 		return readinessPending, "user_missing"
 	}

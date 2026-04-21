@@ -41,8 +41,6 @@ func TestSpec_DefaultRAPRuntime_DisableSession_idempotent(t *testing.T) {
 	spec := &RAPSpec{
 		LocalPort:    9,
 		ProxyHost:    "p",
-		TargetHost:   "h",
-		TargetPort:   22,
 		User:         "u",
 		SessionToken: "a:b",
 		DesiredState: remoteaccessv1.RemoteAccessState_REMOTE_ACCESS_STATE_ENABLED,

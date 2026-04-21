@@ -88,12 +88,6 @@ func (r *RAPReconciler) applyBootstrapDefaults(tenantID, resourceID string, spec
 	if strings.TrimSpace(spec.ProxyHost) == "" {
 		spec.ProxyHost = "remote-access-proxy-ws.kind.internal:443"
 	}
-	if strings.TrimSpace(spec.TargetHost) == "" {
-		spec.TargetHost = "127.0.0.1"
-	}
-	if spec.TargetPort == 0 {
-		spec.TargetPort = 22
-	}
 	if strings.TrimSpace(spec.User) == "" {
 		spec.User = "root"
 	}

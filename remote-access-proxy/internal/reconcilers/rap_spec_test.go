@@ -27,8 +27,6 @@ func baseRAC(tenantID, resID string) *remoteaccessv1.RemoteAccessConfiguration {
 		ExpirationTimestamp: uint64(specEvalNow.Add(time.Hour).Unix()),
 		LocalPort:           30001,
 		ProxyHost:           "proxy.example",
-		TargetHost:          "127.0.0.1",
-		TargetPort:          22,
 		User:                "root",
 		SessionToken:        "u:p",
 	}
@@ -197,8 +195,6 @@ func TestSpec_buildRAPSpec_roundTrip(t *testing.T) {
 	assert.Equal(t, ra.GetTenantId(), got.TenantID)
 	assert.Equal(t, ra.GetProxyHost(), got.ProxyHost)
 	assert.Equal(t, ra.GetLocalPort(), got.LocalPort)
-	assert.Equal(t, ra.GetTargetHost(), got.TargetHost)
-	assert.Equal(t, ra.GetTargetPort(), got.TargetPort)
 	assert.Equal(t, ra.GetUser(), got.User)
 	assert.Equal(t, ra.GetSessionToken(), got.SessionToken)
 	assert.Equal(t, ra.GetDesiredState(), got.DesiredState)

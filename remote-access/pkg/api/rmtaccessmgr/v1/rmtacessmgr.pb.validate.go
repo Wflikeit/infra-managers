@@ -202,10 +202,6 @@ func (m *AgentRemoteAccessSpec) validate(all bool) error {
 
 	// no validation rules for ReverseBindPort
 
-	// no validation rules for TargetHost
-
-	// no validation rules for TargetPort
-
 	// no validation rules for SshUser
 
 	// no validation rules for ExpirationTimestamp

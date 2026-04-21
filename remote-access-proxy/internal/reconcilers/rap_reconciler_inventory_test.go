@@ -214,8 +214,6 @@ func TestSpec_RAPReconcile_after_RAC_create_persists_binding(t *testing.T) {
 	require.GreaterOrEqual(t, got.GetLocalPort(), uint32(21000))
 	require.LessOrEqual(t, got.GetLocalPort(), uint32(21999))
 	require.NotEmpty(t, strings.TrimSpace(got.GetProxyHost()))
-	require.NotEmpty(t, strings.TrimSpace(got.GetTargetHost()))
-	require.Greater(t, got.GetTargetPort(), uint32(0))
 	require.NotEmpty(t, strings.TrimSpace(got.GetUser()))
 	require.NotEmpty(t, strings.TrimSpace(got.GetSessionToken()))
 	require.Contains(t, got.GetSessionToken(), ":", "session_token should be user:pass from bootstrap")

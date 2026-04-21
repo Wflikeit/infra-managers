@@ -104,7 +104,6 @@ func evaluateSpec(ra *remoteaccessv1.RemoteAccessConfiguration, now time.Time) (
 	checkIdentity(ra, &fatalIssues)
 	checkExpiration(ra, now, &fatalIssues, &pendingIssues)
 	checkRAPBinding(ra, &pendingIssues)
-	checkAgentTarget(ra, &pendingIssues)
 	checkAuth(ra, &pendingIssues)
 	checkDesiredState(ra, &fatalIssues)
 
@@ -318,15 +317,6 @@ func checkRAPBinding(ra *remoteaccessv1.RemoteAccessConfiguration, pending *[]st
 	}
 	if strings.TrimSpace(ra.GetProxyHost()) == "" {
 		*pending = append(*pending, "proxy_host not set yet")
-	}
-}
-
-func checkAgentTarget(ra *remoteaccessv1.RemoteAccessConfiguration, pending *[]string) {
-	if strings.TrimSpace(ra.GetTargetHost()) == "" {
-		*pending = append(*pending, "target_host not set yet")
-	}
-	if ra.GetTargetPort() == 0 {
-		*pending = append(*pending, "target_port not set yet")
 	}
 }
 

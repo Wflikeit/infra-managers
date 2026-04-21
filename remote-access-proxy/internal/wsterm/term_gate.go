@@ -35,9 +35,6 @@ func RACBindingIncomplete(ra *remoteaccessv1.RemoteAccessConfiguration) bool {
 	if strings.TrimSpace(ra.GetProxyHost()) == "" {
 		return true
 	}
-	if strings.TrimSpace(ra.GetTargetHost()) == "" || ra.GetTargetPort() == 0 {
-		return true
-	}
 	if strings.TrimSpace(ra.GetUser()) == "" {
 		return true
 	}

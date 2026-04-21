@@ -19,11 +19,9 @@ message AgentRemoteAccessSpec {
   string remote_access_proxy_endpoint = 1;
   string session_token = 2;
   uint32 reverse_bind_port = 3;
-  string target_host = 4;
-  uint32 target_port = 5;
-  string ssh_user = 6;
-  uint64 expiration_timestamp = 7;
-  string uuid = 8;
+  string ssh_user = 4;
+  uint64 expiration_timestamp = 5;
+  string uuid = 6;
 }
 
 enum ConfigStatus {

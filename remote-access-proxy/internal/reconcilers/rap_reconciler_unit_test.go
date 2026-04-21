@@ -94,8 +94,6 @@ func racSpecReadyEnabled(tenantID, resID string) *remoteaccessv1.RemoteAccessCon
 		ExpirationTimestamp: uint64(time.Now().Add(time.Hour).Unix()),
 		LocalPort:           21010,
 		ProxyHost:           "proxy.stub.example",
-		TargetHost:          "127.0.0.1",
-		TargetPort:          22,
 		User:                "root",
 		SessionToken:        "chiseluser:chiselpass",
 	}
@@ -121,8 +119,6 @@ func racSpecInvalidMissingInstance(tenantID, resID string) *remoteaccessv1.Remot
 		ExpirationTimestamp: uint64(time.Now().Add(time.Hour).Unix()),
 		LocalPort:           21011,
 		ProxyHost:           "proxy.stub.example",
-		TargetHost:          "127.0.0.1",
-		TargetPort:          22,
 		User:                "root",
 		SessionToken:        "u:p",
 	}
@@ -141,8 +137,6 @@ func expiredRAC(tenantID, resID string) *remoteaccessv1.RemoteAccessConfiguratio
 		// Binding fields populated so SpecInvalid reason is expiry only (not also "pending").
 		LocalPort:    21001,
 		ProxyHost:    "proxy.example.test",
-		TargetHost:   "agent.example.test",
-		TargetPort:   22,
 		User:         "stubuser",
 		SessionToken: "stubuser:stubpass",
 	}

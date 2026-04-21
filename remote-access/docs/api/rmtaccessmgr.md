@@ -35,8 +35,6 @@
 | remote_access_proxy_endpoint | [string](#string) |  |  |
 | session_token | [string](#string) |  |  |
 | reverse_bind_port | [uint32](#uint32) |  |  |
-| target_host | [string](#string) |  |  |
-| target_port | [uint32](#uint32) |  |  |
 | ssh_user | [string](#string) |  |  |
 | expiration_timestamp | [uint64](#uint64) |  |  |
 | uuid | [string](#string) |  |  |

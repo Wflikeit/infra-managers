@@ -22,8 +22,6 @@ func testRACComplete() *remoteaccessv1.RemoteAccessConfiguration {
 		ProxyHost:           "wss://rap.example/chisel",
 		User:                "edge-user",
 		SessionToken:        "racuser:racpass",
-		TargetHost:          "127.0.0.1",
-		TargetPort:          22,
 		CurrentState:        remoteaccessv1.RemoteAccessState_REMOTE_ACCESS_STATE_ENABLED,
 		DesiredState:        remoteaccessv1.RemoteAccessState_REMOTE_ACCESS_STATE_ENABLED,
 	}
@@ -41,8 +39,6 @@ func TestRACBindingIncomplete(t *testing.T) {
 	}{
 		{"no_expiration", func(ra *remoteaccessv1.RemoteAccessConfiguration) { ra.ExpirationTimestamp = 0 }},
 		{"no_proxy_host", func(ra *remoteaccessv1.RemoteAccessConfiguration) { ra.ProxyHost = "" }},
-		{"no_target_host", func(ra *remoteaccessv1.RemoteAccessConfiguration) { ra.TargetHost = "" }},
-		{"no_target_port", func(ra *remoteaccessv1.RemoteAccessConfiguration) { ra.TargetPort = 0 }},
 		{"no_user", func(ra *remoteaccessv1.RemoteAccessConfiguration) { ra.User = "" }},
 		{"no_session_token", func(ra *remoteaccessv1.RemoteAccessConfiguration) { ra.SessionToken = "" }},
 		{"proxy_whitespace", func(ra *remoteaccessv1.RemoteAccessConfiguration) { ra.ProxyHost = "   " }},

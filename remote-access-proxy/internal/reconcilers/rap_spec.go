@@ -56,9 +56,6 @@ type RAPSpec struct {
 	ProxyHost string
 	LocalPort uint32
 
-	TargetHost string
-	TargetPort uint32
-
 	User         string
 	SessionToken string
 
@@ -74,8 +71,6 @@ func buildRAPSpec(
 		TenantID:     ra.GetTenantId(),
 		ProxyHost:    ra.GetProxyHost(),
 		LocalPort:    ra.GetLocalPort(),
-		TargetHost:   ra.GetTargetHost(),
-		TargetPort:   ra.GetTargetPort(),
 		User:         ra.GetUser(),
 		SessionToken: ra.GetSessionToken(),
 		DesiredState: ra.GetDesiredState(),
@@ -114,7 +109,6 @@ func evaluateSpec(
 	checkDesiredState(ra, &fatal)
 	checkExpirationForRAP(ra, now, &fatal, &pending)
 	checkRAPBinding(ra, &pending)
-	checkAgentTarget(ra, &pending)
 	checkAuth(ra, &pending)
 
 	switch {
@@ -213,19 +207,6 @@ func checkRAPBinding(
 	}
 	if strings.TrimSpace(ra.GetProxyHost()) == "" {
 		*pending = append(*pending, "proxy_host not set")
-	}
-}
-
-// Without target, agent cannot expose SSH endpoint.
-func checkAgentTarget(
-	ra *remoteaccessv1.RemoteAccessConfiguration,
-	pending *[]string,
-) {
-	if strings.TrimSpace(ra.GetTargetHost()) == "" {
-		*pending = append(*pending, "target_host not set")
-	}
-	if ra.GetTargetPort() == 0 {
-		*pending = append(*pending, "target_port not set")
 	}
 }
 
