@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -17,6 +16,7 @@ import (
 	"github.com/gorilla/websocket"
 	remoteaccessv1 "github.com/open-edge-platform/infra-core/inventory/v2/pkg/api/remoteaccess/v1"
 	"github.com/open-edge-platform/infra-core/inventory/v2/pkg/logging"
+	"golang.org/x/crypto/ssh"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -54,9 +54,10 @@ type HandlerConfig struct {
 	Password              string
 }
 
-// NewHandler returns a /term handler that dials ReverseSSHAddr without Inventory.
+// NewHandler returns /term with a fixed reverse-SSH target and on-disk SSH key/password (no Inventory, no Vault).
+// Production RAP uses NewInventoryHandler; this remains for narrow dev/embed cases.
 func NewHandler(cfg HandlerConfig) http.HandlerFunc {
-	return newTermWS(cfg.ReverseSSHAddr, cfg.ReverseSSHWaitTimeout, cfg.SSHUser, cfg.PrivateKeyPath, cfg.Password)
+	return newTermWS(cfg.ReverseSSHAddr, cfg.ReverseSSHWaitTimeout, cfg.SSHUser, cfg.PrivateKeyPath, cfg.Password, nil)
 }
 
 // InventoryHandlerConfig adds Inventory-backed routing when tenant_id and resource_id are set.
@@ -66,6 +67,9 @@ type InventoryHandlerConfig struct {
 	InventoryTimeout time.Duration
 	// Now supplies the instant for TermGateDenied expiry checks. If nil, time.Now().UTC() is used.
 	Now func() time.Time
+	// SessionAuth supplies SSH auth for inventory-backed /term (e.g. Vault user certificates).
+	// When non-nil, PrivateKeyPath and Password are ignored for that path.
+	SessionAuth func(ctx context.Context, ra *remoteaccessv1.RemoteAccessConfiguration, tenantID, resourceID string) ([]ssh.AuthMethod, error)
 }
 
 // NewInventoryHandler returns /term with optional RAC lookup and access checks.
@@ -74,11 +78,19 @@ func NewInventoryHandler(cfg InventoryHandlerConfig) http.HandlerFunc {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	base := newTermWS(cfg.ReverseSSHAddr, cfg.ReverseSSHWaitTimeout, cfg.SSHUser, cfg.PrivateKeyPath, cfg.Password)
+	base := newTermWS(cfg.ReverseSSHAddr, cfg.ReverseSSHWaitTimeout, cfg.SSHUser, cfg.PrivateKeyPath, cfg.Password, nil)
 	return func(w http.ResponseWriter, r *http.Request) {
 		tenantID := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
 		resourceID := strings.TrimSpace(r.URL.Query().Get("resource_id"))
+		// Per-request Inventory lookup (not startup config): RAC keys identify which reverse-SSH
+		// local port (which edge tunnel) to dial. Multiple ENs ⇒ multiple /term sessions with
+		// different resource_id values, not a single RAP-wide preload.
 		if cfg.NetClient == nil || tenantID == "" || resourceID == "" {
+			if cfg.SessionAuth != nil {
+				WriteJSONError(w, http.StatusBadRequest, "term_params_required",
+					"tenant_id and resource_id are required: they select the RemoteAccessConfiguration in Inventory for this /term session (reverse SSH port per edge node). This is not RAP startup configuration.")
+				return
+			}
 			base(w, r)
 			return
 		}
@@ -96,7 +108,7 @@ func NewInventoryHandler(cfg InventoryHandlerConfig) http.HandlerFunc {
 			return
 		}
 
-		if httpSt, code, msg := TermGateDenied(ra, now()); httpSt != 0 {
+		if httpSt, code, msg := TermGateDenied(ra, now(), r); httpSt != 0 {
 			zlog.Info().
 				Str("tenant_id", tenantID).
 				Str("resource_id", resourceID).
@@ -108,12 +120,28 @@ func NewInventoryHandler(cfg InventoryHandlerConfig) http.HandlerFunc {
 		}
 
 		route := RouteFromRA(ra, r, cfg.ReverseSSHAddr, cfg.SSHUser)
+		principalForLog, _ := RAPSSHPrincipal(tenantID)
+		invAudit := &termSSHSessionAudit{TenantID: tenantID, ResourceID: resourceID, Principal: principalForLog}
+		if cfg.SessionAuth != nil {
+			authFn := func(ctx context.Context) ([]ssh.AuthMethod, error) {
+				return cfg.SessionAuth(ctx, ra, tenantID, resourceID)
+			}
+			newTermWSWithAuth(route.ReverseSSHAddr, cfg.ReverseSSHWaitTimeout, route.SSHUser, authFn, invAudit)(w, r)
+			return
+		}
 		if route.ReverseSSHAddr == cfg.ReverseSSHAddr && route.SSHUser == cfg.SSHUser {
 			base(w, r)
 			return
 		}
-		newTermWS(route.ReverseSSHAddr, cfg.ReverseSSHWaitTimeout, route.SSHUser, cfg.PrivateKeyPath, cfg.Password)(w, r)
+		newTermWS(route.ReverseSSHAddr, cfg.ReverseSSHWaitTimeout, route.SSHUser, cfg.PrivateKeyPath, cfg.Password, invAudit)(w, r)
 	}
+}
+
+// termSSHSessionAudit enriches /term logs after a successful SSH dial (Inventory-backed paths).
+type termSSHSessionAudit struct {
+	TenantID   string
+	ResourceID string
+	Principal  string // e.g. rap:<tenant> for Vault SSH; may be empty if RAPSSHPrincipal failed
 }
 
 func newTermWS(
@@ -122,11 +150,28 @@ func newTermWS(
 	sshUser string,
 	privateKeyPath string,
 	password string,
+	audit *termSSHSessionAudit,
+) http.HandlerFunc {
+	return newTermWSWithAuth(reverseSSHAddr, reverseSSHWaitTimeout, sshUser, func(context.Context) ([]ssh.AuthMethod, error) {
+		methods := BuildSSHAuthMethods(privateKeyPath, password)
+		if len(methods) == 0 {
+			return nil, fmt.Errorf("no ssh auth methods configured")
+		}
+		return methods, nil
+	}, audit)
+}
+
+func newTermWSWithAuth(
+	reverseSSHAddr string,
+	reverseSSHWaitTimeout time.Duration,
+	sshUser string,
+	authFn func(context.Context) ([]ssh.AuthMethod, error),
+	audit *termSSHSessionAudit,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
-			log.Printf("WS upgrade: %v", err)
+			zlog.Warn().Err(err).Msg("/term: WebSocket upgrade failed")
 			return
 		}
 		defer conn.Close()
@@ -159,16 +204,20 @@ func newTermWS(
 		}
 		_ = conn.SetReadDeadline(time.Time{})
 
-		sshClient, sess, stdin, stdout, err := DialSSH(
+		sshClient, sess, stdin, stdout, err := DialSSHWithAuth(
+			r.Context(),
 			initRows,
 			initCols,
 			termName,
 			reverseSSHAddr,
 			sshUser,
-			privateKeyPath,
-			password,
+			authFn,
 		)
 		if err != nil {
+			zlog.Warn().Err(err).
+				Str("reverse_ssh", reverseSSHAddr).
+				Str("ssh_user", sshUser).
+				Msg("/term: ssh dial failed (reverse path or Vault SSH auth)")
 			msg := fmt.Sprintf("SSH connection over reverse path failed: %v", err)
 			b, mErr := json.Marshal(map[string]string{
 				"type":    "error",
@@ -182,6 +231,22 @@ func newTermWS(
 			return
 		}
 		defer func() { _ = sess.Close(); _ = sshClient.Close() }()
+
+		established := zlog.Info().
+			Str("reverse_ssh", reverseSSHAddr).
+			Str("ssh_user", sshUser)
+		if audit != nil {
+			if audit.TenantID != "" {
+				established = established.Str("tenant_id", audit.TenantID)
+			}
+			if audit.ResourceID != "" {
+				established = established.Str("resource_id", audit.ResourceID)
+			}
+			if audit.Principal != "" {
+				established = established.Str("ssh_principal", audit.Principal)
+			}
+		}
+		established.Msg("/term: SSH session established (authenticated to edge via reverse path; interactive shell starting)")
 
 		processMsg := func(m wsMsg) bool {
 			switch m.Type {
@@ -235,7 +300,7 @@ func newTermWS(
 		for {
 			_, payload, err := conn.ReadMessage()
 			if err != nil {
-				log.Printf("WS read: %v", err)
+				zlog.Debug().Err(err).Msg("/term: WebSocket read ended")
 				return
 			}
 			var m wsMsg

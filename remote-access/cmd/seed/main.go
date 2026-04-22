@@ -26,6 +26,9 @@
 // Removing RAC: Inventory DeleteResource only soft-deletes (desired_state=DELETED). This tool
 // completes hard delete via UpdateResource (current_state=DELETED) as CLIENT_KIND_RESOURCE_MANAGER,
 // matching internal/store/remoteaccess_test.go.
+//
+// Scripting: set env HUMAN=1 so InfraAPIClient logs go to stderr; stdout stays clean for
+// -print-instance-for-rac and new RAC resource_id from Create.
 package main
 
 import (

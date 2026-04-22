@@ -27,15 +27,31 @@ func WriteJSONError(w http.ResponseWriter, httpStatus int, code, message string)
 	_ = json.NewEncoder(w).Encode(HTTPErrorBody{Code: code, Message: message})
 }
 
+// effectiveSSHUserForBinding resolves the SSH user for binding-readiness checks.
+// Prefers ra.User when set; falls back to the ?ssh_user= query parameter when ra.User is empty.
+// r may be nil (e.g. from unit tests that do not carry a request context).
+func effectiveSSHUserForBinding(ra *remoteaccessv1.RemoteAccessConfiguration, r *http.Request) string {
+	if u := strings.TrimSpace(ra.GetUser()); u != "" {
+		return u
+	}
+	if r != nil {
+		if u := strings.TrimSpace(r.URL.Query().Get("ssh_user")); u != "" {
+			return u
+		}
+	}
+	return ""
+}
+
 // RACBindingIncomplete is true when RAC exists but control-plane fields needed for /term are not ready yet.
-func RACBindingIncomplete(ra *remoteaccessv1.RemoteAccessConfiguration) bool {
+// r may be nil (tests); when non-nil, a non-empty ssh_user query counts toward the user field requirement.
+func RACBindingIncomplete(ra *remoteaccessv1.RemoteAccessConfiguration, r *http.Request) bool {
 	if ra.GetExpirationTimestamp() == 0 {
 		return true
 	}
 	if strings.TrimSpace(ra.GetProxyHost()) == "" {
 		return true
 	}
-	if strings.TrimSpace(ra.GetUser()) == "" {
+	if effectiveSSHUserForBinding(ra, r) == "" {
 		return true
 	}
 	if strings.TrimSpace(ra.GetSessionToken()) == "" {
@@ -45,7 +61,8 @@ func RACBindingIncomplete(ra *remoteaccessv1.RemoteAccessConfiguration) bool {
 }
 
 // TermGateDenied returns non-zero HTTP status if /term must not proceed (before WebSocket upgrade).
-func TermGateDenied(ra *remoteaccessv1.RemoteAccessConfiguration, now time.Time) (httpStatus int, code, message string) {
+// r may be nil; when non-nil it is used to let a ?ssh_user= query satisfy the user binding requirement.
+func TermGateDenied(ra *remoteaccessv1.RemoteAccessConfiguration, now time.Time, r *http.Request) (httpStatus int, code, message string) {
 	if ra == nil {
 		return http.StatusNotFound, "rac_not_found", "Remote access configuration not found."
 	}
@@ -71,7 +88,7 @@ func TermGateDenied(ra *remoteaccessv1.RemoteAccessConfiguration, now time.Time)
 		remoteaccessv1.RemoteAccessState_REMOTE_ACCESS_STATE_UNSPECIFIED:
 		return http.StatusForbidden, "rac_not_available", "Remote access is not available (invalid desired state)."
 	}
-	if RACBindingIncomplete(ra) {
+	if RACBindingIncomplete(ra, r) {
 		return http.StatusServiceUnavailable, "rac_initializing",
 			"Remote access is still being provisioned; try again shortly."
 	}

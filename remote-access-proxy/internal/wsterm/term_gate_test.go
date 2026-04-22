@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
@@ -30,7 +31,7 @@ func testRACComplete() *remoteaccessv1.RemoteAccessConfiguration {
 func TestRACBindingIncomplete(t *testing.T) {
 	t.Parallel()
 	complete := testRACComplete()
-	if RACBindingIncomplete(complete) {
+	if RACBindingIncomplete(complete, nil) {
 		t.Fatal("complete RAC should not be binding-incomplete")
 	}
 	cases := []struct {
@@ -48,10 +49,22 @@ func TestRACBindingIncomplete(t *testing.T) {
 			t.Parallel()
 			ra := testRACComplete()
 			tc.mut(ra)
-			if !RACBindingIncomplete(ra) {
+			if !RACBindingIncomplete(ra, nil) {
 				t.Fatalf("expected incomplete for %s", tc.name)
 			}
 		})
+	}
+}
+
+func TestRACBindingIncomplete_ssh_user_query_satisfies_user_field(t *testing.T) {
+	t.Parallel()
+	ra := testRACComplete()
+	ra.User = ""
+	q := url.Values{}
+	q.Set("ssh_user", "from-query")
+	req := httptest.NewRequest(http.MethodGet, "/term?"+q.Encode(), nil)
+	if RACBindingIncomplete(ra, req) {
+		t.Fatal("non-empty ssh_user in query should satisfy user binding when ra.User is empty")
 	}
 }
 
@@ -61,7 +74,7 @@ func TestTermGateDenied(t *testing.T) {
 
 	t.Run("nil", func(t *testing.T) {
 		t.Parallel()
-		st, code, msg := TermGateDenied(nil, fixedNow)
+		st, code, msg := TermGateDenied(nil, fixedNow, nil)
 		if st != http.StatusNotFound || code != "rac_not_found" || msg == "" {
 			t.Fatalf("got %d %q %q", st, code, msg)
 		}
@@ -69,7 +82,7 @@ func TestTermGateDenied(t *testing.T) {
 
 	t.Run("ok", func(t *testing.T) {
 		t.Parallel()
-		st, code, msg := TermGateDenied(complete, fixedNow)
+		st, code, msg := TermGateDenied(complete, fixedNow, nil)
 		if st != 0 || code != "" || msg != "" {
 			t.Fatalf("expected allow, got %d %q %q", st, code, msg)
 		}
@@ -79,7 +92,7 @@ func TestTermGateDenied(t *testing.T) {
 		t.Parallel()
 		ra := testRACComplete()
 		ra.ExpirationTimestamp = uint64(fixedNow.Unix() - 1)
-		st, code, _ := TermGateDenied(ra, fixedNow)
+		st, code, _ := TermGateDenied(ra, fixedNow, nil)
 		if st != http.StatusForbidden || code != "rac_expired" {
 			t.Fatalf("got %d %q", st, code)
 		}
@@ -90,7 +103,7 @@ func TestTermGateDenied(t *testing.T) {
 		ra := testRACComplete()
 		ra.CurrentState = remoteaccessv1.RemoteAccessState_REMOTE_ACCESS_STATE_ERROR
 		ra.ConfigurationStatus = "session expired"
-		st, code, msg := TermGateDenied(ra, fixedNow)
+		st, code, msg := TermGateDenied(ra, fixedNow, nil)
 		if st != http.StatusForbidden || code != "rac_error" || msg != "session expired" {
 			t.Fatalf("got %d %q %q", st, code, msg)
 		}
@@ -100,7 +113,7 @@ func TestTermGateDenied(t *testing.T) {
 		t.Parallel()
 		ra := testRACComplete()
 		ra.DesiredState = remoteaccessv1.RemoteAccessState_REMOTE_ACCESS_STATE_DISABLED
-		st, code, _ := TermGateDenied(ra, fixedNow)
+		st, code, _ := TermGateDenied(ra, fixedNow, nil)
 		if st != http.StatusForbidden || code != "rac_disabled" {
 			t.Fatalf("got %d %q", st, code)
 		}
@@ -110,7 +123,7 @@ func TestTermGateDenied(t *testing.T) {
 		t.Parallel()
 		ra := testRACComplete()
 		ra.SessionToken = ""
-		st, code, _ := TermGateDenied(ra, fixedNow)
+		st, code, _ := TermGateDenied(ra, fixedNow, nil)
 		if st != http.StatusServiceUnavailable || code != "rac_initializing" {
 			t.Fatalf("got %d %q", st, code)
 		}
@@ -120,9 +133,20 @@ func TestTermGateDenied(t *testing.T) {
 		t.Parallel()
 		ra := testRACComplete()
 		ra.LocalPort = 0
-		st, code, _ := TermGateDenied(ra, fixedNow)
+		st, code, _ := TermGateDenied(ra, fixedNow, nil)
 		if st != http.StatusServiceUnavailable || code != "tunnel_unavailable" {
 			t.Fatalf("got %d %q", st, code)
+		}
+	})
+
+	t.Run("ok_when_ra_user_empty_but_ssh_user_query_set", func(t *testing.T) {
+		t.Parallel()
+		ra := testRACComplete()
+		ra.User = ""
+		req := httptest.NewRequest(http.MethodGet, "/term?"+url.Values{"ssh_user": {"vendev"}}.Encode(), nil)
+		st, code, msg := TermGateDenied(ra, fixedNow, req)
+		if st != 0 || code != "" || msg != "" {
+			t.Fatalf("expected allow, got %d %q %q", st, code, msg)
 		}
 	})
 }

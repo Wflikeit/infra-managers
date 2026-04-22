@@ -4,6 +4,7 @@
 package wsterm
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/ssh"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -112,4 +114,27 @@ func TestSpec_NewInventoryHandler_HTTP_before_websocket(t *testing.T) {
 		require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
 		assert.Equal(t, "rac_disabled", body.Code)
 	})
+}
+
+func TestSpec_NewInventoryHandler_VaultSessionAuth_requires_query_params(t *testing.T) {
+	h := NewInventoryHandler(InventoryHandlerConfig{
+		HandlerConfig: HandlerConfig{
+			ReverseSSHAddr:        "127.0.0.1:1",
+			ReverseSSHWaitTimeout: time.Millisecond,
+			SSHUser:               "vendev",
+			PrivateKeyPath:        "",
+			Password:              "",
+		},
+		NetClient: mocks.NewInventoryRACGetter(t),
+		SessionAuth: func(context.Context, *remoteaccessv1.RemoteAccessConfiguration, string, string) ([]ssh.AuthMethod, error) {
+			return nil, errors.New("should not be called")
+		},
+	})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/term", nil)
+	h(rec, req)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	var body HTTPErrorBody
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
+	assert.Equal(t, "term_params_required", body.Code)
 }

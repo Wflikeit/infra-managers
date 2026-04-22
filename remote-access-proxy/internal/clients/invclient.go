@@ -340,3 +340,4 @@ func (n *RmtAccessInventoryClient) FindRemoteAccessConfigs(ctx context.Context, 
 	}
 	return rmtAccessCfgs, nil
 }
+

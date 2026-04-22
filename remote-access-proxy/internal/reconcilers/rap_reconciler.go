@@ -5,6 +5,7 @@ package reconcilers
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -204,6 +205,32 @@ func (r *RAPReconciler) ensureChiselRuntimeIfSkipped(
 	}
 
 	specLocal := buildRAPSpec(ra)
+	// Best-effort allocator seed on the skip path: inventory is stable, so we just need the
+	// allocator to learn which port this RAC already owns. On conflict we only log — the skip
+	// path does not own Inventory writes, so self-heal belongs in the full reconcile below.
+	// Out-of-range / exhaustion errors are surfaced as operational status so the operator sees
+	// the inconsistency even when nothing else will run for this RAC until desired changes.
+	if specLocal.LocalPort != 0 {
+		if err := r.ports.reserveKnown(tenantID, resourceID, specLocal.LocalPort); err != nil {
+			if errors.Is(err, ErrLocalPortConflict) {
+				zlog.InfraSec().Warn().
+					Str("tenant_id", tenantID).
+					Str("resource_id", resourceID).
+					Uint32("inventory_port", specLocal.LocalPort).
+					Err(err).
+					Msg("RAP skip path: allocator seed detected a conflict with another (tenant,resource) on this replica; deferring heal to the next full reconcile (skip path does not write to Inventory)")
+			} else {
+				return r.publishRAPOperationalError(
+					ctx,
+					req,
+					tenantID,
+					resourceID,
+					"port allocator (skip path): "+err.Error(),
+					now,
+				)
+			}
+		}
+	}
 	token := strings.TrimSpace(specLocal.SessionToken)
 	chiselUser := chiselUsernameForLog(specLocal.SessionToken)
 	if token == "" {
@@ -325,7 +352,23 @@ func (r *RAPReconciler) reconcileWithSpec(
 		}
 
 		spec := buildRAPSpec(ra)
-		if err := r.syncChiselFromToken(spec.SessionToken); err != nil {
+		// Seed / reconcile the replica-local allocator for this RAC. Without this call the
+		// allocator is untouched for RACs whose spec is already ready-steady at startup, which
+		// means a later bootstrap path could hand out a port that is already claimed in
+		// Inventory. ensureLocalPort also self-heals on conflict by reallocating + clearing
+		// spec.SessionToken; ensureChiselCredential then mints a fresh credential so the
+		// binding PATCH below (persistBinding) is internally consistent.
+		if err := r.ensureLocalPort(tenantID, resourceID, spec); err != nil {
+			return r.publishRAPOperationalError(
+				ctx,
+				req,
+				tenantID,
+				resourceID,
+				"port allocator: "+err.Error(),
+				now,
+			)
+		}
+		if err := r.ensureChiselCredential(resourceID, spec); err != nil {
 			return r.publishRAPOperationalError(
 				ctx,
 				req,

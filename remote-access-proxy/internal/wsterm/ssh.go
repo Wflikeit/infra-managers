@@ -4,6 +4,7 @@
 package wsterm
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -39,7 +40,31 @@ func DialSSH(
 	privateKeyPath string,
 	password string,
 ) (*ssh.Client, *ssh.Session, io.WriteCloser, io.Reader, error) {
-	authMethods := BuildSSHAuthMethods(privateKeyPath, password)
+	return DialSSHWithAuth(context.Background(), rows, cols, term, reverseSSHAddr, sshUser, func(context.Context) ([]ssh.AuthMethod, error) {
+		methods := BuildSSHAuthMethods(privateKeyPath, password)
+		if len(methods) == 0 {
+			return nil, fmt.Errorf("no ssh auth methods configured")
+		}
+		return methods, nil
+	})
+}
+
+// DialSSHWithAuth is like DialSSH but obtains auth methods via authFn (e.g. Vault-signed ephemeral cert).
+func DialSSHWithAuth(
+	ctx context.Context,
+	rows, cols int,
+	term string,
+	reverseSSHAddr string,
+	sshUser string,
+	authFn func(context.Context) ([]ssh.AuthMethod, error),
+) (*ssh.Client, *ssh.Session, io.WriteCloser, io.Reader, error) {
+	if authFn == nil {
+		return nil, nil, nil, nil, fmt.Errorf("ssh auth function is nil")
+	}
+	authMethods, err := authFn(ctx)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
 	if len(authMethods) == 0 {
 		return nil, nil, nil, nil, fmt.Errorf("no ssh auth methods configured")
 	}

@@ -71,9 +71,12 @@ func NewNBHandler(netCl *clients.RmtAccessInventoryClient,
 
 // Start starts the NB handler and its control loop.
 func (nbh *NBHandler) Start() error {
-	// 1. Reconcile all
-	// 2. Start controlLoop
-	// 3. Stop by watching events
+	// 1. Reconcile all — per-RAC reconcile paths seed the replica-local port allocator lazily
+	//    (reserveKnown for RACs whose binding is already persisted, allocateOrGet otherwise).
+	//    On reserveKnown conflict the reconciler self-heals by reallocating and rewriting the
+	//    binding in Inventory (see reconcilers.applyBootstrapDefaults).
+	// 2. Start controlLoop.
+	// 3. Stop by watching events.
 	if err := nbh.reconcileAll(); err != nil {
 		return err
 	}

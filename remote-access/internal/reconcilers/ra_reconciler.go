@@ -10,15 +10,10 @@ import (
 
 	"github.com/open-edge-platform/cluster-api-provider-intel/pkg/tracing"
 	remoteaccessv1 "github.com/open-edge-platform/infra-core/inventory/v2/pkg/api/remoteaccess/v1"
-	statusv1 "github.com/open-edge-platform/infra-core/inventory/v2/pkg/api/status/v1"
 	"github.com/open-edge-platform/infra-core/inventory/v2/pkg/logging"
 	"github.com/open-edge-platform/infra-managers/remote-access/pkg/clients"
 	rec_v2 "github.com/open-edge-platform/orch-library/go/pkg/controller/v2"
 )
-
-// ramTunnelUpStatusToken must match the substring present in RAP operational status when the
-// edge reverse tunnel is observed (see remote-access-proxy rap_reconciler / rap_bootstrap).
-const ramTunnelUpStatusToken = "reverse tunnel up"
 
 // Misc variables.
 var (
@@ -177,49 +172,17 @@ func (rar *RAReconciler) markError(
 	reason string,
 	now time.Time,
 ) rec_v2.Directive[ReconcilerID] {
-	zlog.Warn().
-		Str("tenant_id", tenantID).
-		Str("resource_id", resourceID).
-		Str("reason", reason).
-		Time("now", now).
-		Msg("RAM markError: RM invalid; configuration_status (operational text) is owned by RAP — not patched here")
-	return rar.patchRMInventoryState(
-		ctx,
-		req,
-		tenantID,
-		resourceID,
-		remoteaccessv1.RemoteAccessState_REMOTE_ACCESS_STATE_ERROR,
-		statusv1.StatusIndication_STATUS_INDICATION_ERROR,
-	)
-}
-
-func (rar *RAReconciler) patchRMInventoryState(
-	ctx context.Context,
-	req rec_v2.Request[ReconcilerID],
-	tenantID, resourceID string,
-	current remoteaccessv1.RemoteAccessState,
-	indicator statusv1.StatusIndication,
-) rec_v2.Directive[ReconcilerID] {
 	patch := &remoteaccessv1.RemoteAccessConfiguration{
 		ResourceId:                   resourceID,
-		CurrentState:                 current,
-		ConfigurationStatusIndicator: indicator,
+		CurrentState:                 remoteaccessv1.RemoteAccessState_REMOTE_ACCESS_STATE_ERROR,
+		ConfigurationStatus:          reason,
+		ConfigurationStatusTimestamp: uint64(now.Unix()),
 	}
 	err := rar.netClient.UpdateRemoteAccessConfigState(ctx, tenantID, resourceID, patch, rar.inventoryTimeout)
 	if d := HandleInventoryError(err, req); d != nil {
 		return d
 	}
 	return req.Ack()
-}
-
-func ramInventoryShowsOperationalTunnelUp(ra *remoteaccessv1.RemoteAccessConfiguration) bool {
-	if ra == nil {
-		return false
-	}
-	if ra.GetConfigurationStatusIndicator() != statusv1.StatusIndication_STATUS_INDICATION_IDLE {
-		return false
-	}
-	return strings.Contains(strings.ToLower(ra.GetConfigurationStatus()), ramTunnelUpStatusToken)
 }
 
 func (rar *RAReconciler) convergeState(
@@ -234,47 +197,21 @@ func (rar *RAReconciler) convergeState(
 		targetState = remoteaccessv1.RemoteAccessState_REMOTE_ACCESS_STATE_ERROR
 	}
 
-	// Two-step path toward ENABLED (§12.4 B): CONFIGURED = inventory Ready; ENABLED after RAP tunnel text + IDLE indicator.
-	if targetState == remoteaccessv1.RemoteAccessState_REMOTE_ACCESS_STATE_ENABLED {
-		switch ra.GetCurrentState() {
-		case remoteaccessv1.RemoteAccessState_REMOTE_ACCESS_STATE_ENABLED:
-			return req.Ack()
-		case remoteaccessv1.RemoteAccessState_REMOTE_ACCESS_STATE_CONFIGURED:
-			if ramInventoryShowsOperationalTunnelUp(ra) {
-				return rar.patchRMInventoryState(
-					ctx,
-					req,
-					tenantID,
-					resourceID,
-					remoteaccessv1.RemoteAccessState_REMOTE_ACCESS_STATE_ENABLED,
-					statusv1.StatusIndication_STATUS_INDICATION_IDLE,
-				)
-			}
-			return req.Ack()
-		default:
-			return rar.patchRMInventoryState(
-				ctx,
-				req,
-				tenantID,
-				resourceID,
-				remoteaccessv1.RemoteAccessState_REMOTE_ACCESS_STATE_CONFIGURED,
-				statusv1.StatusIndication_STATUS_INDICATION_IDLE,
-			)
-		}
-	}
-
 	if ra.GetCurrentState() == targetState {
 		return req.Ack()
 	}
 
-	return rar.patchRMInventoryState(
-		ctx,
-		req,
-		tenantID,
-		resourceID,
-		targetState,
-		statusv1.StatusIndication_STATUS_INDICATION_IDLE,
-	)
+	patch := &remoteaccessv1.RemoteAccessConfiguration{
+		ResourceId:                   resourceID,
+		CurrentState:                 targetState,
+		ConfigurationStatus:          "remote access configuration applied",
+		ConfigurationStatusTimestamp: uint64(now.Unix()),
+	}
+	err := rar.netClient.UpdateRemoteAccessConfigState(ctx, tenantID, resourceID, patch, rar.inventoryTimeout)
+	if d := HandleInventoryError(err, req); d != nil {
+		return d
+	}
+	return req.Ack()
 }
 
 type SpecReadiness int

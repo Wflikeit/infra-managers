@@ -18,6 +18,7 @@ import (
 	chserver "github.com/jpillora/chisel/server"
 	"github.com/prometheus/client_golang/prometheus"
 
+	remoteaccessv1 "github.com/open-edge-platform/infra-core/inventory/v2/pkg/api/remoteaccess/v1"
 	inv_client "github.com/open-edge-platform/infra-core/inventory/v2/pkg/client"
 	"github.com/open-edge-platform/infra-core/inventory/v2/pkg/logging"
 	"github.com/open-edge-platform/infra-core/inventory/v2/pkg/metrics"
@@ -28,8 +29,11 @@ import (
 	"github.com/open-edge-platform/infra-managers/remote-access-proxy/internal/common"
 	"github.com/open-edge-platform/infra-managers/remote-access-proxy/internal/handlers"
 	"github.com/open-edge-platform/infra-managers/remote-access-proxy/internal/reconcilers"
+	"github.com/open-edge-platform/infra-managers/remote-access-proxy/internal/vaultssh"
 	"github.com/open-edge-platform/infra-managers/remote-access-proxy/internal/wsterm"
 	"github.com/open-edge-platform/infra-managers/remote-access-proxy/pkg/config"
+
+	"golang.org/x/crypto/ssh"
 )
 
 var (
@@ -56,8 +60,8 @@ var (
 	chiselKeepAlive         = flag.Duration(common.ChiselKeepAlive, common.DefaultChiselKeepAlive, common.ChiselKeepAliveDescription)
 	reverseSSHAddr          = flag.String(common.ReverseSSHAddr, common.DefaultReverseSSHAddr, common.ReverseSSHAddrDescription)
 	reverseSSHWaitTimeout   = flag.Duration(common.ReverseSSHWaitTimeout, common.DefaultReverseSSHWaitTimeout, common.ReverseSSHWaitTimeoutDescription)
-	sshPrivateKeyPath       = flag.String("sshPrivateKeyPath", "", "Path to SSH private key used by /term (optional)")
-	sshPassword             = flag.String("sshPassword", "zaq12wsx", "Fallback SSH password used by /term when key auth is unavailable")
+	sshPrivateKeyPath       = flag.String("sshPrivateKeyPath", "", "Ignored for inventory /term (Vault SSH only); accepted for compatibility with older deployments")
+	sshPassword             = flag.String("sshPassword", "zaq12wsx", "Ignored for inventory /term when SessionAuth is used; kept for legacy handler paths")
 	invCacheUUIDEnable      = flag.Bool(inv_client.InvCacheUUIDEnable, false, inv_client.InvCacheUUIDEnableDescription)
 	invCacheStaleTimeout    = flag.Duration(
 		inv_client.InvCacheStaleTimeout, inv_client.InvCacheStaleTimeoutDefault, inv_client.InvCacheStaleTimeoutDescription)
@@ -75,6 +79,42 @@ var (
 	Revision  = "<unset>"
 	BuildDate = "<unset>"
 )
+
+// Vault SSH for /term is always used for the inventory-backed path. Configuration is via
+// environment variables (no CLI flags). Empty or unset VAULT_ADDR falls back to the in-cluster URL.
+const (
+	envVaultAddr               = "VAULT_ADDR"
+	envVaultSSHMount           = "VAULT_SSH_MOUNT"
+	envVaultSSHSignRole        = "VAULT_SSH_SIGN_ROLE"
+	envVaultKubernetesAuthRole = "VAULT_KUBERNETES_AUTH_ROLE"
+	envVaultKubernetesJWTPath  = "VAULT_KUBERNETES_JWT_PATH"
+
+	defaultVaultAddr = "http://vault.orch-platform.svc.cluster.local:8200"
+	defaultSSHMount  = "ssh-client-signer"
+	defaultSignRole  = "rap-term"
+	defaultK8sRole   = "remote-access-proxy"
+)
+
+func vaultEnv() (addr, mount, signRole, k8sRole, jwtPath string) {
+	addr = strings.TrimSpace(os.Getenv(envVaultAddr))
+	if addr == "" {
+		addr = defaultVaultAddr
+	}
+	mount = strings.TrimSpace(os.Getenv(envVaultSSHMount))
+	if mount == "" {
+		mount = defaultSSHMount
+	}
+	signRole = strings.TrimSpace(os.Getenv(envVaultSSHSignRole))
+	if signRole == "" {
+		signRole = defaultSignRole
+	}
+	k8sRole = strings.TrimSpace(os.Getenv(envVaultKubernetesAuthRole))
+	if k8sRole == "" {
+		k8sRole = defaultK8sRole
+	}
+	jwtPath = strings.TrimSpace(os.Getenv(envVaultKubernetesJWTPath))
+	return addr, mount, signRole, k8sRole, jwtPath
+}
 
 func printSummary() {
 	zlog.Info().Msgf("Starting Remote Access Proxy")
@@ -231,22 +271,52 @@ func main() {
 		}
 	}()
 
+	sshKeyPath := strings.TrimSpace(*sshPrivateKeyPath)
+	sshPass := strings.TrimSpace(*sshPassword)
+	vaultAddr, vaultMount, vaultSignRole, vaultK8sRole, vaultJWTPath := vaultEnv()
+	vaultSigner, err := vaultssh.NewSigner(vaultssh.SignerConfig{
+		VaultAddress:       vaultAddr,
+		Mount:              vaultMount,
+		SignRole:           vaultSignRole,
+		KubernetesAuthRole: vaultK8sRole,
+		KubernetesJWTPath:  vaultJWTPath,
+	})
+	if err != nil {
+		zlog.Fatal().Err(err).Msg("Vault SSH signer")
+	}
+	zlog.Info().
+		Str("vault_address", vaultAddr).
+		Str("vault_ssh_mount", vaultMount).
+		Str("vault_sign_role", vaultSignRole).
+		Str("vault_kubernetes_auth_role", vaultK8sRole).
+		Msg("RAP: /term uses Vault SSH user certificates (inventory path)")
+	if sshKeyPath != "" {
+		zlog.Info().Msg("RAP: -sshPrivateKeyPath is set but ignored for inventory /term (Vault SSH)")
+	}
+
+	termCfg := wsterm.InventoryHandlerConfig{
+		HandlerConfig: wsterm.HandlerConfig{
+			ReverseSSHAddr:        conf.ReverseSSHAddr,
+			ReverseSSHWaitTimeout: conf.ReverseSSHWaitTimeout,
+			SSHUser:               "vendev",
+			PrivateKeyPath:        sshKeyPath,
+			Password:              sshPass,
+		},
+		NetClient:        netClient,
+		InventoryTimeout: conf.InventoryTimeout,
+		SessionAuth: func(ctx context.Context, _ *remoteaccessv1.RemoteAccessConfiguration, tenantID, resourceID string) ([]ssh.AuthMethod, error) {
+			_ = resourceID // RAC id is for Inventory only; SSH principal is tenant-scoped for onboarding before RAC exists
+			principal, err := wsterm.RAPSSHPrincipal(tenantID)
+			if err != nil {
+				return nil, err
+			}
+			return vaultSigner.AuthMethods(ctx, principal)
+		},
+	}
+
 	// Start WebSocket terminal server
 	mux := http.NewServeMux()
-	mux.HandleFunc(
-		"/term",
-		wsterm.NewInventoryHandler(wsterm.InventoryHandlerConfig{
-			HandlerConfig: wsterm.HandlerConfig{
-				ReverseSSHAddr:        conf.ReverseSSHAddr,
-				ReverseSSHWaitTimeout: conf.ReverseSSHWaitTimeout,
-				SSHUser:               "vendev",
-				PrivateKeyPath:        strings.TrimSpace(*sshPrivateKeyPath),
-				Password:              strings.TrimSpace(*sshPassword),
-			},
-			NetClient:        netClient,
-			InventoryTimeout: conf.InventoryTimeout,
-		}),
-	)
+	mux.HandleFunc("/term", wsterm.NewInventoryHandler(termCfg))
 
 	wsSrv := &http.Server{
 		Addr:              conf.WebSocketAddr,
