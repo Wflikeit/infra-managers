@@ -251,10 +251,10 @@ func (n *RmtAccessInventoryClient) UpdateRemoteAccessConfigState(ctx context.Con
 	defer cancel()
 	// Handcrafted PATCH update and validate before sending to Inventory.
 	// Do not set or mask updated_at — Inventory rejects client writes to that field.
-	// RAP owns operational narrative only (§12.12 B): never patch configuration_status_indicator from RAP.
+	// RAP owns configuration_status_code only (§12.12 B): never patch configuration_status_indicator from RAP.
 	fieldMask := &fieldmaskpb.FieldMask{
 		Paths: []string{
-			remoteaccessv1.RemoteAccessConfigurationFieldConfigurationStatus,
+			remoteaccessv1.RemoteAccessConfigurationFieldConfigurationStatusCode,
 			remoteaccessv1.RemoteAccessConfigurationFieldConfigurationStatusTimestamp,
 		},
 	}

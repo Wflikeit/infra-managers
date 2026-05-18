@@ -75,7 +75,7 @@ func main() {
 		fmt.Printf("  DesiredState:  %s\n", ra.GetDesiredState())
 		fmt.Printf("  CurrentState:  %s\n", ra.GetCurrentState())
 		fmt.Printf("  Expiration:    %d (%s)\n", ra.GetExpirationTimestamp(), time.Unix(int64(ra.GetExpirationTimestamp()), 0).UTC())
-		fmt.Printf("  ConfStatus:    %s\n", ra.GetConfigurationStatus())
+		fmt.Printf("  ConfStatusCode: %s\n", ra.GetConfigurationStatusCode().String())
 		fmt.Println("")
 	}
 }

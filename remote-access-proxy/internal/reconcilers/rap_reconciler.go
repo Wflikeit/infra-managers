@@ -317,16 +317,13 @@ func (r *RAPReconciler) reconcileWithSpec(
 	switch spec.Readiness {
 
 	case SpecInvalid:
+		if isExpiredInvalid(spec) || ra.GetDesiredState() == remoteaccessv1.RemoteAccessState_REMOTE_ACCESS_STATE_DELETED {
+			// RAP may refresh configuration_status (operational text). RAM owns desired_state and
+			// performs soft/hard delete on expiry; RAP signals connection inactive after teardown.
+			return r.rapTeardownAndSignalInactive(ctx, req, tenantID, resourceID, ra, "expired or deleted")
+		}
 		r.removeChiselUserFromToken(ra.GetSessionToken())
 		r.teardownLocalReplicaSession(ctx, tenantID, resourceID, "spec invalid: "+spec.Reason)
-		if isExpiredInvalid(spec) {
-			// RAP may refresh configuration_status (operational text). RAM owns current_state
-			// (ERROR) via UpdateRemoteAccessConfigState with current_state in the field mask.
-			if d := r.setConnectionStatus(ctx, req, tenantID, resourceID, spec.Reason, now); d != nil {
-				return d
-			}
-			return req.Ack()
-		}
 		// Invalid spec for reasons other than expiry (identity, binding, etc.): RAM owns current_state / ERROR.
 		return req.Ack()
 
@@ -335,6 +332,9 @@ func (r *RAPReconciler) reconcileWithSpec(
 			r.removeChiselUserFromToken(ra.GetSessionToken())
 			r.teardownLocalReplicaSession(ctx, tenantID, resourceID, "desired disabled (pending)")
 			return req.Ack()
+		}
+		if ra.GetDesiredState() == remoteaccessv1.RemoteAccessState_REMOTE_ACCESS_STATE_DELETED {
+			return r.rapTeardownAndSignalInactive(ctx, req, tenantID, resourceID, ra, "desired deleted (pending)")
 		}
 
 		// Break the bootstrap deadlock: even when spec is still pending, attempt runtime bootstrap
@@ -349,6 +349,9 @@ func (r *RAPReconciler) reconcileWithSpec(
 			r.removeChiselUserFromToken(ra.GetSessionToken())
 			r.teardownLocalReplicaSession(ctx, tenantID, resourceID, "desired disabled")
 			return r.patchRAPReconciledIdleOperationalStatus(ctx, req, tenantID, resourceID, ra, now)
+		}
+		if ra.GetDesiredState() == remoteaccessv1.RemoteAccessState_REMOTE_ACCESS_STATE_DELETED {
+			return r.rapTeardownAndSignalInactive(ctx, req, tenantID, resourceID, ra, "desired deleted")
 		}
 
 		spec := buildRAPSpec(ra)
@@ -390,14 +393,10 @@ func (r *RAPReconciler) reconcileWithSpec(
 			)
 		}
 
-		statusText := "remote access proxy ready; waiting for edge agent reverse tunnel"
-		if conn.AgentReverseTunnelUp {
-			statusText = "remote access connection active (edge agent reverse tunnel up)"
-		}
 		if d := r.persistBinding(ctx, req, tenantID, resourceID, spec); d != nil {
 			return d
 		}
-		if d := r.setConnectionStatus(ctx, req, tenantID, resourceID, statusText, now); d != nil {
+		if d := r.setConnectionStatusCode(ctx, req, tenantID, resourceID, rapTunnelStatusCode(conn.AgentReverseTunnelUp), now); d != nil {
 			return d
 		}
 

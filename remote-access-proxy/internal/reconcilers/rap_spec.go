@@ -183,8 +183,13 @@ func checkExpirationForRAP(
 	fatal *[]string,
 	pending *[]string,
 ) {
+	// Expiration is fatal only when enabling (not when revoking or deleting).
 	if ra.GetDesiredState() ==
 		remoteaccessv1.RemoteAccessState_REMOTE_ACCESS_STATE_DISABLED {
+		return
+	}
+	if ra.GetDesiredState() ==
+		remoteaccessv1.RemoteAccessState_REMOTE_ACCESS_STATE_DELETED {
 		return
 	}
 

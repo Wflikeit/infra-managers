@@ -28,7 +28,7 @@ const (
 
 // SignerConfig configures Vault SSH certificate signing.
 type SignerConfig struct {
-	VaultAddress string // e.g. http://vault.vault.svc:8200
+	VaultAddress string
 	// Mount is the SSH secrets engine mount path (no trailing slash), e.g. "ssh-client-signer".
 	Mount string
 	// SignRole is the signing role name under the mount (vault write <mount>/sign/<SignRole>).
@@ -123,9 +123,15 @@ func (s *Signer) AuthMethods(ctx context.Context, validPrincipal string) ([]ssh.
 	role := strings.Trim(strings.TrimSpace(s.cfg.SignRole), "/")
 	path := fmt.Sprintf("%s/sign/%s", mount, role)
 	sec, err := s.client.Logical().WriteWithContext(ctx, path, map[string]interface{}{
-		"public_key":        pubLine,
-		"valid_principals":  principal,
-		"cert_type":         "user",
+		"public_key":       pubLine,
+		"valid_principals": principal,
+		"cert_type":        "user",
+		// Keep the cert lifetime tight regardless of the role's default TTL:
+		// it is consumed exactly once per /term request for the SSH handshake
+		// and then discarded together with the in-memory key pair. 5m covers
+		// dial + auth with generous margin while minimising the leak-and-reuse
+		// window.
+		"ttl": "5m",
 	})
 	if err != nil {
 		return nil, fmt.Errorf("vault ssh sign %q: %w", path, err)

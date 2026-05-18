@@ -29,12 +29,12 @@ func (r *RAPReconciler) tryBootstrapFromPending(
 	}
 	spec := buildRAPSpec(ra)
 	if err := r.applyBootstrapDefaults(tenantID, resourceID, spec); err != nil {
-		if d := r.setConnectionStatus(
+		if d := r.setConnectionStatusCode(
 			ctx,
 			req,
 			tenantID,
 			resourceID,
-			"bootstrap pending: "+err.Error(),
+			remoteaccessv1.RemoteAccessConfigurationStatus_REMOTE_ACCESS_CONFIGURATION_STATUS_PROVISIONING,
 			now,
 		); d != nil {
 			return d
@@ -44,12 +44,12 @@ func (r *RAPReconciler) tryBootstrapFromPending(
 	conn, err := r.runtime.EnsureSession(ctx, tenantID, resourceID, spec)
 	if err != nil {
 		// Keep reconciliation non-fatal during bootstrap; expose reason in status.
-		if d := r.setConnectionStatus(
+		if d := r.setConnectionStatusCode(
 			ctx,
 			req,
 			tenantID,
 			resourceID,
-			"bootstrap pending: "+err.Error(),
+			remoteaccessv1.RemoteAccessConfigurationStatus_REMOTE_ACCESS_CONFIGURATION_STATUS_PROVISIONING,
 			now,
 		); d != nil {
 			return d
@@ -59,11 +59,7 @@ func (r *RAPReconciler) tryBootstrapFromPending(
 	if d := r.persistBinding(ctx, req, tenantID, resourceID, spec); d != nil {
 		return d
 	}
-	statusText := "remote access proxy ready; waiting for edge agent reverse tunnel"
-	if conn.AgentReverseTunnelUp {
-		statusText = "remote access connection active (edge agent reverse tunnel up)"
-	}
-	if d := r.setConnectionStatus(ctx, req, tenantID, resourceID, statusText, now); d != nil {
+	if d := r.setConnectionStatusCode(ctx, req, tenantID, resourceID, rapTunnelStatusCode(conn.AgentReverseTunnelUp), now); d != nil {
 		return d
 	}
 	return nil

@@ -72,8 +72,9 @@ func TermGateDenied(ra *remoteaccessv1.RemoteAccessConfiguration, now time.Time,
 	switch ra.GetCurrentState() {
 	case remoteaccessv1.RemoteAccessState_REMOTE_ACCESS_STATE_ERROR:
 		msg := "Remote access is in an error state."
-		if s := strings.TrimSpace(ra.GetConfigurationStatus()); s != "" {
-			msg = s
+		if ra.GetConfigurationStatusCode() ==
+			remoteaccessv1.RemoteAccessConfigurationStatus_REMOTE_ACCESS_CONFIGURATION_STATUS_OPERATIONAL_ERROR {
+			msg = "Remote access proxy reported an operational error."
 		}
 		return http.StatusForbidden, "rac_error", msg
 	case remoteaccessv1.RemoteAccessState_REMOTE_ACCESS_STATE_DISABLED,

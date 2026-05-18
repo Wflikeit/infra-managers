@@ -145,7 +145,8 @@ func expiredRAC(tenantID, resID string) *remoteaccessv1.RemoteAccessConfiguratio
 // TestSpec_RAPReconcile_when_expiration_in_past_then_teardown_and_operational_status verifies
 // the SpecInvalid+expiry path when RAM has NOT yet set current_state=ERROR:
 //   - DisableSession is called (replica teardown)
-//   - UpdateRemoteAccessConfigState is called with configuration_status containing the expiry reason
+//   - UpdateRemoteAccessConfigState is called with configuration_status containing connection inactive
+//     (RAM hard-deletes after this signal; no longer ERROR on expiry)
 //   - Reconcile returns Ack
 //
 // This test uses a stubInventoryClient because inventory rejects RAC creation with
@@ -169,16 +170,15 @@ func TestSpec_RAPReconcile_when_expiration_in_past_then_teardown_and_operational
 	// Replica teardown: DisableSession must be called.
 	require.NotEmpty(t, rt.disableReasons,
 		"reconciler must call DisableSession for expired RAC")
-	require.Contains(t, rt.disableReasons[len(rt.disableReasons)-1], "expiration_timestamp is in the past",
+	require.Contains(t, rt.disableReasons[len(rt.disableReasons)-1], "expired or deleted",
 		"DisableSession reason must mention expiry")
 
-	// Operational status: UpdateRemoteAccessConfigState must persist expiry text.
+	// Operational status: UpdateRemoteAccessConfigState must persist inactive text for RAM.
 	require.NotEmpty(t, stub.stateUpdates,
 		"reconciler must call UpdateRemoteAccessConfigState to persist expiry status")
-	require.Contains(t,
+	require.Equal(t, ConnectionInactiveStatus,
 		stub.stateUpdates[len(stub.stateUpdates)-1].GetConfigurationStatus(),
-		"expiration_timestamp is in the past",
-		"configuration_status must contain expiry reason")
+		"configuration_status must contain connection inactive for RAM hard delete")
 }
 
 // TestSpec_RAPReconcile_when_expiration_in_past_and_current_state_error_then_ack_only verifies
@@ -212,6 +212,31 @@ func TestSpec_RAPReconcile_when_expiration_in_past_and_current_state_error_then_
 	// RAM owns current_state=ERROR: RAP must NOT call UpdateRemoteAccessConfigState.
 	require.Empty(t, stub.stateUpdates,
 		"reconciler must NOT write configuration_status when RAM already set current_state=ERROR (RAM owns state)")
+}
+
+// TestSpec_RAPReconcile_when_expired_and_desired_deleted_then_teardown_and_inactive_status verifies
+// RAP still tears down and signals inactive when RAM has already soft-deleted (desired=DELETED).
+func TestSpec_RAPReconcile_when_expired_and_desired_deleted_then_teardown_and_inactive_status(t *testing.T) {
+	const (
+		tenantID = "11111111-1111-1111-1111-111111111111"
+		resID    = "rmtacconf-expired-deleted"
+	)
+
+	rac := expiredRAC(tenantID, resID)
+	rac.DesiredState = remoteaccessv1.RemoteAccessState_REMOTE_ACCESS_STATE_DELETED
+
+	stub := &stubInventoryClient{getResult: rac}
+	rt := &recordingRAPRuntime{inner: NewInMemoryRAPRuntime()}
+	rec := newReconcilerWithStub(stub, rt, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req := rec_v2.Request[ReconcilerID]{ID: NewReconcilerID(tenantID, resID)}
+
+	requireAck(t, rec.Reconcile(ctx, req))
+	require.NotEmpty(t, rt.disableReasons)
+	require.Equal(t, ConnectionInactiveStatus,
+		stub.stateUpdates[len(stub.stateUpdates)-1].GetConfigurationStatus())
 }
 
 func TestSpec_RAPReconcile_when_inventory_get_transient_error_then_retry_directive(t *testing.T) {

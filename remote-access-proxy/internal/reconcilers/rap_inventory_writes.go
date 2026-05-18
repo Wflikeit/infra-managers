@@ -69,19 +69,19 @@ func (r *RAPReconciler) persistBinding(
 	return nil
 }
 
-// setConnectionStatus persists operational narrative in configuration_status (+ timestamp) only.
+// setConnectionStatusCode persists RAP operational status (configuration_status_code + timestamp).
 // configuration_status_indicator is owned by RAM (§12.12 B).
-func (r *RAPReconciler) setConnectionStatus(
+func (r *RAPReconciler) setConnectionStatusCode(
 	ctx context.Context,
 	req rec_v2.Request[ReconcilerID],
 	tenantID string,
 	resourceID string,
-	statusText string,
+	code remoteaccessv1.RemoteAccessConfigurationStatus,
 	now time.Time,
 ) rec_v2.Directive[ReconcilerID] {
 	patch := &remoteaccessv1.RemoteAccessConfiguration{
 		ResourceId:                   resourceID,
-		ConfigurationStatus:          statusText,
+		ConfigurationStatusCode:      code,
 		ConfigurationStatusTimestamp: uint64(now.Unix()),
 	}
 	err := r.netClient.UpdateRemoteAccessConfigState(ctx, tenantID, resourceID, patch, r.inventoryTimeout)
@@ -101,7 +101,8 @@ func (r *RAPReconciler) publishRAPOperationalError(
 	reason string,
 	now time.Time,
 ) rec_v2.Directive[ReconcilerID] {
-	if d := r.setConnectionStatus(ctx, req, tenantID, resourceID, reason, now); d != nil {
+	if d := r.setConnectionStatusCode(ctx, req, tenantID, resourceID,
+		remoteaccessv1.RemoteAccessConfigurationStatus_REMOTE_ACCESS_CONFIGURATION_STATUS_OPERATIONAL_ERROR, now); d != nil {
 		return d
 	}
 	return req.Ack()
@@ -130,12 +131,29 @@ func (r *RAPReconciler) patchRAPReconciledIdleOperationalStatus(
 
 	patch := &remoteaccessv1.RemoteAccessConfiguration{
 		ResourceId:                   resourceID,
-		ConfigurationStatus:          "remote access proxy reconciled",
+		ConfigurationStatusCode:      remoteaccessv1.RemoteAccessConfigurationStatus_REMOTE_ACCESS_CONFIGURATION_STATUS_TUNNEL_ACTIVE,
 		ConfigurationStatusTimestamp: uint64(now.Unix()),
 	}
 
 	err := r.netClient.UpdateRemoteAccessConfigState(ctx, tenantID, resourceID, patch, r.inventoryTimeout)
 	if d := HandleInventoryError(err, req); d != nil {
+		return d
+	}
+	return req.Ack()
+}
+
+// rapTeardownAndSignalInactive tears down replica runtime and persists ConnectionInactiveStatus
+// so RAM can finalize hard delete after expiry or soft-delete (desired=DELETED).
+func (r *RAPReconciler) rapTeardownAndSignalInactive(
+	ctx context.Context,
+	req rec_v2.Request[ReconcilerID],
+	tenantID, resourceID string,
+	ra *remoteaccessv1.RemoteAccessConfiguration,
+	reason string,
+) rec_v2.Directive[ReconcilerID] {
+	r.removeChiselUserFromToken(ra.GetSessionToken())
+	r.teardownLocalReplicaSession(ctx, tenantID, resourceID, reason)
+	if d := r.setConnectionStatusCode(ctx, req, tenantID, resourceID, ConnectionInactiveCode, time.Now().UTC()); d != nil {
 		return d
 	}
 	return req.Ack()

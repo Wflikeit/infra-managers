@@ -10,6 +10,7 @@ import (
 
 	"github.com/open-edge-platform/cluster-api-provider-intel/pkg/tracing"
 	remoteaccessv1 "github.com/open-edge-platform/infra-core/inventory/v2/pkg/api/remoteaccess/v1"
+	statusv1 "github.com/open-edge-platform/infra-core/inventory/v2/pkg/api/status/v1"
 	"github.com/open-edge-platform/infra-core/inventory/v2/pkg/logging"
 	"github.com/open-edge-platform/infra-managers/remote-access/pkg/clients"
 	rec_v2 "github.com/open-edge-platform/orch-library/go/pkg/controller/v2"
@@ -21,8 +22,17 @@ var (
 	zlog       = logging.GetLogger(loggerName)
 )
 
+// racInventoryClient is the inventory subset used by RAReconciler.
+// Implemented by *clients.RmtAccessInventoryClient; tests may provide stubs.
+type racInventoryClient interface {
+	GetRemoteAccessConf(ctx context.Context, tenantID, resourceID string, timeout time.Duration) (*remoteaccessv1.RemoteAccessConfiguration, error)
+	UpdateRemoteAccessConfigState(ctx context.Context, tenantID, resourceID string, remAccessConf *remoteaccessv1.RemoteAccessConfiguration, timeout time.Duration) error
+	SoftDeleteRemoteAccessConf(ctx context.Context, tenantID, resourceID string, timeout time.Duration) error
+	FinalizeRemoteAccessConfDeletion(ctx context.Context, tenantID, resourceID string, ra *remoteaccessv1.RemoteAccessConfiguration, timeout time.Duration) error
+}
+
 type RAReconciler struct {
-	netClient        *clients.RmtAccessInventoryClient
+	netClient        racInventoryClient
 	tracingEnabled   bool
 	inventoryTimeout time.Duration
 }
@@ -152,6 +162,9 @@ func (rar *RAReconciler) reconcileWithSpec(
 
 	switch spec.Readiness {
 	case SpecReadinessInvalid:
+		if specIndicatesExpirationPast(spec.Reason) {
+			return rar.reconcileExpired(ctx, req, tenantID, resourceID, ra)
+		}
 		return rar.markError(ctx, req, tenantID, resourceID, spec.Reason, now)
 
 	case SpecReadinessPending:
@@ -165,6 +178,46 @@ func (rar *RAReconciler) reconcileWithSpec(
 	}
 }
 
+// reconcileExpired implements expiry teardown in Inventory: soft delete (desired=DELETED) so RAP
+// can tear down runtime, then hard delete (current=DELETED) once configuration_status reports
+// connection inactive. Does not use current_state=ERROR for expiry.
+func (rar *RAReconciler) reconcileExpired(
+	ctx context.Context,
+	req rec_v2.Request[ReconcilerID],
+	tenantID, resourceID string,
+	ra *remoteaccessv1.RemoteAccessConfiguration,
+) rec_v2.Directive[ReconcilerID] {
+	if ra.GetDesiredState() != remoteaccessv1.RemoteAccessState_REMOTE_ACCESS_STATE_DELETED {
+		err := rar.netClient.SoftDeleteRemoteAccessConf(ctx, tenantID, resourceID, rar.inventoryTimeout)
+		if d := HandleInventoryError(err, req); d != nil {
+			return d
+		}
+		zlog.Info().
+			Str("tenant_id", tenantID).
+			Str("resource_id", resourceID).
+			Msg("RAM: expired RAC soft-deleted (desired=DELETED); waiting for RAP teardown")
+		return req.Ack()
+	}
+
+	if !rapReportedConnectionInactive(ra) {
+		zlog.Debug().
+			Str("tenant_id", tenantID).
+			Str("resource_id", resourceID).
+			Msg("RAM: expired RAC awaiting RAP connection inactive before hard delete")
+		return req.Ack()
+	}
+
+	err := rar.netClient.FinalizeRemoteAccessConfDeletion(ctx, tenantID, resourceID, ra, rar.inventoryTimeout)
+	if d := HandleInventoryError(err, req); d != nil {
+		return d
+	}
+	zlog.Info().
+		Str("tenant_id", tenantID).
+		Str("resource_id", resourceID).
+		Msg("RAM: expired RAC hard-deleted from inventory")
+	return req.Ack()
+}
+
 func (rar *RAReconciler) markError(
 	ctx context.Context,
 	req rec_v2.Request[ReconcilerID],
@@ -175,9 +228,10 @@ func (rar *RAReconciler) markError(
 	patch := &remoteaccessv1.RemoteAccessConfiguration{
 		ResourceId:                   resourceID,
 		CurrentState:                 remoteaccessv1.RemoteAccessState_REMOTE_ACCESS_STATE_ERROR,
-		ConfigurationStatus:          reason,
+		ConfigurationStatusIndicator: statusv1.StatusIndication_STATUS_INDICATION_ERROR,
 		ConfigurationStatusTimestamp: uint64(now.Unix()),
 	}
+	_ = reason // retained for call-site context; operational detail is RAP-owned (configuration_status_code).
 	err := rar.netClient.UpdateRemoteAccessConfigState(ctx, tenantID, resourceID, patch, rar.inventoryTimeout)
 	if d := HandleInventoryError(err, req); d != nil {
 		return d
@@ -204,7 +258,6 @@ func (rar *RAReconciler) convergeState(
 	patch := &remoteaccessv1.RemoteAccessConfiguration{
 		ResourceId:                   resourceID,
 		CurrentState:                 targetState,
-		ConfigurationStatus:          "remote access configuration applied",
 		ConfigurationStatusTimestamp: uint64(now.Unix()),
 	}
 	err := rar.netClient.UpdateRemoteAccessConfigState(ctx, tenantID, resourceID, patch, rar.inventoryTimeout)
@@ -244,7 +297,7 @@ func checkExpiration(
 	case ts == 0:
 		*pending = append(*pending, "expiration_timestamp not set yet")
 	case int64(ts) <= now.Unix():
-		*fatal = append(*fatal, "expiration_timestamp is in the past")
+		*fatal = append(*fatal, ExpirationPastReason)
 	}
 }
 
